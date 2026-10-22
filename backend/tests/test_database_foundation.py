@@ -19,16 +19,25 @@ def test_metadata_uses_stable_constraint_naming_convention() -> None:
     assert metadata.naming_convention == EXPECTED_NAMING_CONVENTION
 
 
-def test_alembic_has_single_loadable_head_that_enables_pgvector(monkeypatch) -> None:
+def test_identity_metadata_defines_auth_tables() -> None:
+    assert {"users", "auth_sessions", "password_reset_tokens"} <= set(metadata.tables)
+
+
+def test_alembic_has_single_loadable_identity_head_that_enables_pgvector(
+    monkeypatch,
+) -> None:
     backend_dir = Path(__file__).resolve().parents[1]
     config = Config(backend_dir / "alembic.ini")
     config.set_main_option("script_location", str(backend_dir / "alembic"))
     scripts = ScriptDirectory.from_config(config)
 
     heads = scripts.get_heads()
-    assert len(heads) == 1
+    assert heads == ["0002_identity_auth"]
 
-    revision = scripts.get_revision(heads[0])
+    identity_revision = scripts.get_revision(heads[0])
+    assert identity_revision.down_revision == "0001_enable_pgvector"
+
+    revision = scripts.get_revision("0001_enable_pgvector")
     executed_sql = []
     monkeypatch.setattr(revision.module.op, "execute", executed_sql.append)
 

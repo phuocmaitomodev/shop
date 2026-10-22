@@ -5,3 +5,5 @@ SQLAlchemy==2.0.40
 alembic==1.15.2
 asyncpg==0.30.0
 pydantic-settings==2.8.1
+email-validator==2.2.0
+argon2-cffi==23.1.0

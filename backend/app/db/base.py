@@ -14,3 +14,7 @@ metadata = MetaData(naming_convention=NAMING_CONVENTION)
 
 class Base(DeclarativeBase):
     metadata = metadata
+
+
+# Import model modules after Base is defined so Alembic and tests see all tables.
+from app.models import auth as _auth_models  # noqa: E402,F401

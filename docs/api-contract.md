@@ -53,6 +53,8 @@ Frontend dựa vào `code`, không parse `message`. Mã trạng thái chính: `4
 
 Login admin dùng cùng endpoint nhưng backend trả role; frontend điều hướng theo role. Không có social login.
 
+Trong chế độ demo local, `forgot-password` luôn trả cùng một response và tạo token reset ngắn hạn nhưng API không trả token trong JSON và không gửi email thật. Người vận hành local lấy token bằng CLI được mô tả trong backend README. `reset-password` nhận `token` và `new_password`, dùng token một lần rồi thu hồi toàn bộ session hiện tại của user.
+
 ## 3. Catalog public
 
 | Method | Path | Mục đích |
@@ -138,6 +140,8 @@ Request message: `message`, `client_message_id`. Response:
 ## 6. Admin
 
 Tất cả endpoint dưới `/admin` yêu cầu role `admin`.
+
+- `GET /admin/auth-check`: endpoint nền tảng BE-04 để xác minh session có role admin; trả user hiện tại theo success envelope và không trả `password_hash`.
 
 ### Dashboard
 

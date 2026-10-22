@@ -6,6 +6,7 @@ from app.core.config import get_settings
 from app.core.errors import register_exception_handlers
 from app.core.logging import configure_logging
 from app.core.middleware import RequestContextMiddleware
+from app.core.rate_limit import InMemoryRateLimiter
 
 
 def create_app() -> FastAPI:
@@ -13,6 +14,7 @@ def create_app() -> FastAPI:
     configure_logging(settings.log_level)
 
     application = FastAPI(title=settings.app_name)
+    application.state.auth_rate_limiter = InMemoryRateLimiter()
     application.add_middleware(RequestContextMiddleware)
     application.add_middleware(
         CORSMiddleware,
