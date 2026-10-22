@@ -23,7 +23,35 @@ def test_identity_metadata_defines_auth_tables() -> None:
     assert {"users", "auth_sessions", "password_reset_tokens"} <= set(metadata.tables)
 
 
-def test_alembic_has_single_loadable_identity_head_that_enables_pgvector(
+def test_catalog_metadata_defines_required_tables() -> None:
+    assert {
+        "categories",
+        "products",
+        "product_images",
+        "colors",
+        "sizes",
+        "product_variants",
+        "labels",
+        "product_labels",
+    } <= set(metadata.tables)
+
+
+def test_catalog_business_tables_have_timestamps() -> None:
+    for table_name in {
+        "categories",
+        "products",
+        "product_images",
+        "colors",
+        "sizes",
+        "product_variants",
+        "labels",
+    }:
+        assert {"created_at", "updated_at"} <= set(
+            metadata.tables[table_name].columns.keys()
+        )
+
+
+def test_alembic_has_single_loadable_catalog_head_that_enables_pgvector(
     monkeypatch,
 ) -> None:
     backend_dir = Path(__file__).resolve().parents[1]
@@ -32,10 +60,10 @@ def test_alembic_has_single_loadable_identity_head_that_enables_pgvector(
     scripts = ScriptDirectory.from_config(config)
 
     heads = scripts.get_heads()
-    assert heads == ["0002_identity_auth"]
+    assert heads == ["0003_catalog"]
 
-    identity_revision = scripts.get_revision(heads[0])
-    assert identity_revision.down_revision == "0001_enable_pgvector"
+    catalog_revision = scripts.get_revision(heads[0])
+    assert catalog_revision.down_revision == "0002_identity_auth"
 
     revision = scripts.get_revision("0001_enable_pgvector")
     executed_sql = []

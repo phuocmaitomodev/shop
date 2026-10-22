@@ -67,6 +67,8 @@ Trong chế độ demo local, `forgot-password` luôn trả cùng một response
 
 `GET /products` hỗ trợ: `q`, `category`, `min_price`, `max_price`, `sizes[]`, `colors[]`, `labels[]`, `sort`, `page`, `page_size`. Chỉ variant active/còn phù hợp tham gia filter availability. `effective_price` do backend tính từ `price`/`sale_price` hợp lệ.
 
+Phạm vi BE-05 cung cấp `page`, `page_size`, danh sách category active, product card cơ bản và product detail theo slug. Các query search/filter/sort, facets và related trong contract trên được triển khai ở BE-07. Public API không trả product/category bị inactive hoặc soft-delete; detail chỉ trả variant active và vẫn giữ variant active có tồn kho bằng 0 để client hiển thị trạng thái hết hàng.
+
 Product card tối thiểu:
 
 ```json
