@@ -1,0 +1,17 @@
+{
+  "name": "shop-qa",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "test": "playwright test",
+    "test:smoke": "playwright test --grep @smoke",
+    "test:smoke:chromium": "playwright test --grep @smoke --project=chromium-desktop --project=chromium-mobile",
+    "install:browsers": "playwright install chromium"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.56.1",
+    "@types/node": "^24.19.2",
+    "typescript": "~6.0.3"
+  }
+}
