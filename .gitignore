@@ -1,0 +1,24 @@
+# IDE metadata
+.idea/
+
+# Environment secrets
+.env
+
+# Python caches
+__pycache__/
+pycache/
+.pytest_cache/
+
+# Node dependencies and build output
+node_modules/
+dist/
+
+# Coverage output
+coverage/
+.coverage
+
+# Playwright artifacts
+playwright-report/
+blob-report/
+test-results/
+.playwright/
