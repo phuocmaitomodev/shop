@@ -153,8 +153,11 @@ Lớp chuẩn hóa cho mọi source có embedding:
 ### `rag_index_jobs`
 
 - `id`, `source_type`, `source_id`, `source_version`, `status` (`pending|processing|succeeded|failed`).
+- `event_type` (`upsert|delete`), `payload jsonb`, `payload_version` bắt đầu từ `1`; consumer phải từ chối version payload chưa hỗ trợ thay vì đoán schema.
 - `attempt_count`, `available_at`, `locked_at`, `last_error`, timestamps.
 - Unique idempotency `(source_type, source_id, source_version)`.
+- `payload` chỉ chứa metadata ổn định cần cho routing; worker nạp source theo `source_type/source_id` và kiểm tra `source_version`, không coi payload là nguồn nội dung hiện hành. `last_error` phải được sanitize.
+- `source_id` của `rag_documents` và `rag_index_jobs` là tham chiếu đa hình đến `products` hoặc `knowledge_documents`, nên không có foreign key PostgreSQL trực tiếp. Service phải tạo/cập nhật source, `rag_documents` và job trong cùng transaction; worker xử lý source bị xóa bằng event `delete`.
 
 ## 7. Chat và support
 
