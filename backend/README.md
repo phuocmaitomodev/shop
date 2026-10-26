@@ -61,10 +61,10 @@ Public registration always creates a `customer`. Admin accounts are created by t
 BE-05 adds the catalog migration `0003_catalog` and these public endpoints under `/api/v1`:
 
 - `GET /categories` — active categories ordered by `sort_order`.
-- `GET /products?page=1&page_size=20` — active product cards with exact integer VND prices, primary image, labels, and in-stock color/size availability.
+- `GET /products?page=1&page_size=20` — active product cards with exact integer VND prices, primary image, labels, and in-stock color/size availability. Optional `q`, `category`, `min_price`, `max_price`, `color`, and `size` parameters can be combined.
 - `GET /products/{slug}` — product detail with category, ordered images, labels, and active variants with live stock quantities.
 
-Products in inactive categories, inactive products, and soft-deleted products are not exposed. Inactive variants are omitted; active zero-stock variants remain in detail responses with `is_available=false`. Search, facets, filters, sorting, and related products are intentionally deferred to BE-07.
+Products in inactive categories, inactive products, and soft-deleted products are not exposed. Inactive variants are omitted; active zero-stock variants remain in detail responses with `is_available=false`. Search and catalog filters are implemented; facets, sorting, and related products remain outside the current MVP contract.
 
 ### Deterministic demo catalog
 

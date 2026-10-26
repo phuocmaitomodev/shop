@@ -1,6 +1,17 @@
 from fastapi.testclient import TestClient
 
 
+def _schema_option(parameter: dict, expected_type: str) -> dict:
+    parameter_schema = parameter["schema"]
+    if parameter_schema.get("type") == expected_type:
+        return parameter_schema
+    return next(
+        option
+        for option in parameter_schema["anyOf"]
+        if option.get("type") == expected_type
+    )
+
+
 def test_openapi_contains_be04_auth_and_admin_guard_endpoints(
     client: TestClient,
 ) -> None:
@@ -37,9 +48,15 @@ def test_openapi_contains_be05_public_catalog_endpoints(client: TestClient) -> N
     product_detail_responses = paths["/api/v1/products/{slug}"]["get"][
         "responses"
     ]
+    assert product_list_responses["200"]["content"]["application/json"]["schema"][
+        "$ref"
+    ] == "#/components/schemas/ProductListEnvelope"
     assert product_list_responses["422"]["content"]["application/json"]["schema"][
         "$ref"
     ] == "#/components/schemas/ErrorEnvelope"
+    assert product_detail_responses["200"]["content"]["application/json"]["schema"][
+        "$ref"
+    ] == "#/components/schemas/ProductDetailEnvelope"
     assert product_detail_responses["404"]["content"]["application/json"][
         "schema"
     ]["$ref"] == "#/components/schemas/ErrorEnvelope"
@@ -61,20 +78,46 @@ def test_openapi_contains_be05_public_catalog_endpoints(client: TestClient) -> N
         "color",
         "size",
     }
-    assert parameters["page"]["schema"]["maximum"] == 1_000_000
-    assert parameters["page_size"]["schema"]["maximum"] == 100
-    max_price_schema = next(
-        option
-        for option in parameters["max_price"]["schema"]["anyOf"]
-        if option.get("type") == "integer"
+    assert all(
+        parameter["in"] == "query" and parameter.get("required") is not True
+        for parameter in parameters.values()
     )
-    assert max_price_schema["maximum"] == 9_223_372_036_854_775_807
+    page_schema = _schema_option(parameters["page"], "integer")
+    assert page_schema["minimum"] == 1
+    assert page_schema["maximum"] == 1_000_000
+    assert page_schema["default"] == 1
+    page_size_schema = _schema_option(parameters["page_size"], "integer")
+    assert page_size_schema["minimum"] == 1
+    assert page_size_schema["maximum"] == 100
+    assert page_size_schema["default"] == 20
+    for name, maximum_length in {
+        "q": 200,
+        "category": 140,
+        "color": 120,
+        "size": 20,
+    }.items():
+        assert _schema_option(parameters[name], "string")["maxLength"] == maximum_length
+    for name in ("min_price", "max_price"):
+        price_schema = _schema_option(parameters[name], "integer")
+        assert price_schema["minimum"] == 0
+        assert price_schema["maximum"] == 9_223_372_036_854_775_807
     assert parameters["category"]["schema"]["examples"] == ["ao-thun"]
     assert parameters["color"]["schema"]["examples"] == ["den"]
     assert parameters["size"]["schema"]["examples"] == ["M"]
 
     card_schema = schema["components"]["schemas"]["ProductCardResponse"]
     assert {"category", "in_stock"} <= set(card_schema["required"])
+    page_response_schema = schema["components"]["schemas"]["ProductPageData"]
+    assert {"items", "page", "page_size", "total"} == set(
+        page_response_schema["required"]
+    )
+    detail_schema = schema["components"]["schemas"]["ProductDetailResponse"]
+    assert {"description", "images", "variants"} <= set(detail_schema["required"])
+    error_schema = schema["components"]["schemas"]["ErrorEnvelope"]
+    assert {"error", "meta"} == set(error_schema["required"])
+    assert {"code", "message", "fields", "details"} == set(
+        schema["components"]["schemas"]["ErrorBody"]["required"]
+    )
 
 
 def test_openapi_contains_admin_knowledge_and_index_status_contract(
