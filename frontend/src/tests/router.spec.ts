@@ -1,6 +1,7 @@
 import { createMemoryHistory } from 'vue-router'
 import { describe, expect, it } from 'vitest'
 
+import PlaceholderPage from '../pages/PlaceholderPage.vue'
 import { createAppRouter } from '../router'
 
 const primaryRoutes = [
@@ -33,6 +34,12 @@ const primaryRoutes = [
 ]
 
 describe('application router', () => {
+  it('uses the real product listing page for /san-pham', () => {
+    const router = createAppRouter(createMemoryHistory())
+
+    expect(router.resolve('/san-pham').matched[0]?.components?.default).not.toBe(PlaceholderPage)
+  })
+
   it.each(primaryRoutes)('resolves %s to a named placeholder route', (path) => {
     const router = createAppRouter(createMemoryHistory())
     const resolved = router.resolve(path)

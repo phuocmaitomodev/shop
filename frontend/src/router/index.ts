@@ -18,7 +18,12 @@ const placeholder = (path: string, name: string, title: string, description: str
 
 export const routes: RouteRecordRaw[] = [
   { path: '/', name: 'home', component: HomePage, meta: { title: 'Trang chủ' } },
-  placeholder('/san-pham', 'products', 'Sản phẩm', 'Danh sách, tìm kiếm, lọc và sắp xếp sản phẩm sẽ được triển khai ở FE-03.'),
+  {
+    path: '/san-pham',
+    name: 'products',
+    component: () => import('../pages/ProductListPage.vue'),
+    meta: { title: 'Sản phẩm' },
+  },
   placeholder('/danh-muc/:slug', 'category', 'Danh mục sản phẩm', 'Trang danh mục sẽ hiển thị sản phẩm theo nhóm thời trang.'),
   placeholder('/san-pham/:slug', 'product-detail', 'Chi tiết sản phẩm', 'Thông tin sản phẩm, biến thể và sản phẩm liên quan sẽ được bổ sung ở FE-03.'),
   placeholder('/gio-hang', 'cart', 'Giỏ hàng', 'Quản lý sản phẩm và số lượng trong giỏ hàng sẽ được triển khai ở FE-04.'),
