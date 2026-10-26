@@ -47,6 +47,35 @@ def test_openapi_contains_be05_public_catalog_endpoints(client: TestClient) -> N
         "schema"
     ]["$ref"] == "#/components/schemas/ErrorEnvelope"
 
+    list_operation = paths["/api/v1/products"]["get"]
+    parameters = {
+        parameter["name"]: parameter for parameter in list_operation["parameters"]
+    }
+    assert set(parameters) == {
+        "page",
+        "page_size",
+        "q",
+        "category",
+        "min_price",
+        "max_price",
+        "color",
+        "size",
+    }
+    assert parameters["page"]["schema"]["maximum"] == 1_000_000
+    assert parameters["page_size"]["schema"]["maximum"] == 100
+    max_price_schema = next(
+        option
+        for option in parameters["max_price"]["schema"]["anyOf"]
+        if option.get("type") == "integer"
+    )
+    assert max_price_schema["maximum"] == 9_223_372_036_854_775_807
+    assert parameters["category"]["schema"]["examples"] == ["ao-thun"]
+    assert parameters["color"]["schema"]["examples"] == ["den"]
+    assert parameters["size"]["schema"]["examples"] == ["M"]
+
+    card_schema = schema["components"]["schemas"]["ProductCardResponse"]
+    assert {"category", "in_stock"} <= set(card_schema["required"])
+
 
 def test_openapi_contains_admin_knowledge_and_index_status_contract(
     client: TestClient,
