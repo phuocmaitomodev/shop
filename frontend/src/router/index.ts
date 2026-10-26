@@ -25,7 +25,12 @@ export const routes: RouteRecordRaw[] = [
     meta: { title: 'Sản phẩm' },
   },
   placeholder('/danh-muc/:slug', 'category', 'Danh mục sản phẩm', 'Trang danh mục sẽ hiển thị sản phẩm theo nhóm thời trang.'),
-  placeholder('/san-pham/:slug', 'product-detail', 'Chi tiết sản phẩm', 'Thông tin sản phẩm, biến thể và sản phẩm liên quan sẽ được bổ sung ở FE-03.'),
+  {
+    path: '/san-pham/:slug',
+    name: 'product-detail',
+    component: () => import('../pages/ProductDetailPage.vue'),
+    meta: { title: 'Chi tiết sản phẩm' },
+  },
   placeholder('/gio-hang', 'cart', 'Giỏ hàng', 'Quản lý sản phẩm và số lượng trong giỏ hàng sẽ được triển khai ở FE-04.'),
   placeholder('/thanh-toan', 'checkout', 'Thanh toán', 'Quy trình đặt hàng sáu bước sẽ được triển khai ở FE-05.'),
   placeholder('/dat-hang-thanh-cong', 'order-success', 'Đặt hàng thành công', 'Trang xác nhận và mã đơn hàng sẽ được triển khai ở FE-05.'),
