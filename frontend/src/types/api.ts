@@ -10,8 +10,8 @@ export interface ApiSuccess<T> {
 export interface ApiErrorBody {
   code: string
   message: string
-  fields?: Record<string, string>
-  details?: Record<string, unknown>
+  fields: Record<string, string>
+  details: Record<string, unknown>
 }
 
 export interface ApiErrorEnvelope {

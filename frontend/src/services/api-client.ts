@@ -21,6 +21,26 @@ export class ApiClientError extends Error {
   }
 }
 
+const isRecord = (value: unknown): value is Record<string, unknown> => (
+  typeof value === 'object' && value !== null && !Array.isArray(value)
+)
+
+const isStringRecord = (value: unknown): value is Record<string, string> => (
+  isRecord(value) && Object.values(value).every((item) => typeof item === 'string')
+)
+
+const isApiErrorEnvelope = (value: unknown): value is ApiErrorEnvelope => {
+  if (!isRecord(value) || !isRecord(value.error) || !isRecord(value.meta)) return false
+
+  return (
+    typeof value.error.code === 'string'
+    && typeof value.error.message === 'string'
+    && isStringRecord(value.error.fields)
+    && isRecord(value.error.details)
+    && typeof value.meta.request_id === 'string'
+  )
+}
+
 export const apiClient = async <T>(path: string, init: RequestInit = {}): Promise<T> => {
   const headers = new Headers(init.headers)
   if (!headers.has('Accept')) {
@@ -30,14 +50,20 @@ export const apiClient = async <T>(path: string, init: RequestInit = {}): Promis
     headers.set('Content-Type', 'application/json')
   }
 
-  const response = await fetch(`${apiBaseUrl.replace(/\/$/, '')}/${path.replace(/^\//, '')}`, {
-    ...init,
-    credentials: 'include',
-    headers,
-  })
+  let response: Response
+  try {
+    response = await fetch(`${apiBaseUrl.replace(/\/$/, '')}/${path.replace(/^\//, '')}`, {
+      ...init,
+      credentials: 'include',
+      headers,
+    })
+  } catch {
+    throw new ApiClientError(0, null)
+  }
 
   if (!response.ok) {
-    const payload = (await response.json().catch(() => null)) as ApiErrorEnvelope | null
+    const responseBody: unknown = await response.json().catch(() => null)
+    const payload = isApiErrorEnvelope(responseBody) ? responseBody : null
     throw new ApiClientError(response.status, payload)
   }
 
