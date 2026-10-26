@@ -215,3 +215,11 @@ Seed phải:
 - Tạo admin demo và một số customer bằng password từ config/seed output an toàn.
 - Có verification query/test đếm product, kiểm tra SKU/slug/variant uniqueness và orphan rows.
 - Chạy idempotent hoặc fail rõ ràng; README nêu cách reset database demo.
+
+## 11. Trạng thái triển khai
+
+Tài liệu này là schema mục tiêu. Ma trận đối chiếu revision, bảng/cột, kiểu dữ
+liệu, nullability, application/server default, constraint, index, seed và cấu
+hình đã triển khai trên branch hiện tại nằm tại
+[`database-migration-evidence.md`](database-migration-evidence.md). Không suy ra
+các bảng ở mục 4, 5 và 7 đã tồn tại nếu ma trận chưa có bằng chứng migration.
