@@ -274,3 +274,68 @@ def test_postgres_expired_lease_fences_old_worker() -> None:
             await engine.dispose()
 
     asyncio.run(exercise_lease_fence())
+
+
+def test_postgres_recovery_skips_locked_stale_job() -> None:
+    assert DATABASE_URL is not None
+
+    async def exercise_recovery_contention() -> None:
+        engine = create_async_engine(DATABASE_URL, poolclass=NullPool)
+        session_factory = async_sessionmaker(engine, expire_on_commit=False)
+        try:
+            stale_job_id = UUID(int=11)
+            pending_job_id = UUID(int=12)
+            async with session_factory() as session, session.begin():
+                await session.execute(
+                    text("TRUNCATE rag_chunks, rag_index_jobs, rag_documents CASCADE")
+                )
+                session.add_all(
+                    [
+                        RagIndexJob(
+                            id=stale_job_id,
+                            source_type="knowledge",
+                            source_id=UUID(int=111),
+                            source_version=1,
+                            event_type="upsert",
+                            payload={},
+                            status="processing",
+                            attempt_count=1,
+                            locked_at=datetime.now(timezone.utc)
+                            - timedelta(minutes=10),
+                        ),
+                        RagIndexJob(
+                            id=pending_job_id,
+                            source_type="knowledge",
+                            source_id=UUID(int=112),
+                            source_version=1,
+                            event_type="upsert",
+                            payload={},
+                        ),
+                    ]
+                )
+
+            worker = RagIndexWorker(
+                session_factory,
+                DeterministicEmbeddingProvider(dimension=768),
+                WorkerOptions(embedding_dimension=768, lock_timeout_seconds=60),
+            )
+            async with session_factory() as lock_session, lock_session.begin():
+                locked_job = await lock_session.scalar(
+                    select(RagIndexJob)
+                    .where(RagIndexJob.id == stale_job_id)
+                    .with_for_update()
+                )
+                assert locked_job is not None
+                claim = await asyncio.wait_for(worker._claim_next_job(), timeout=1)
+                assert claim is not None
+                assert claim.id == pending_job_id
+
+            async with session_factory() as session:
+                stale_job = await session.get(RagIndexJob, stale_job_id)
+                assert stale_job is not None
+                assert stale_job.status == "processing"
+                assert stale_job.attempt_count == 1
+        finally:
+            await engine.dispose()
+
+    asyncio.run(exercise_recovery_contention())

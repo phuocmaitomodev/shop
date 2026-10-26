@@ -23,10 +23,12 @@ class Settings(BaseSettings):
     rag_embedding_provider: Literal["stub"] = "stub"
     embedding_dimension: int = Field(default=768, gt=0)
     rag_worker_lock_timeout_seconds: int = Field(default=300, gt=0)
+    rag_worker_provider_timeout_seconds: float = Field(default=120.0, gt=0)
     rag_worker_max_attempts: int = Field(default=5, gt=0)
     rag_worker_retry_base_seconds: int = Field(default=5, gt=0)
     rag_worker_retry_max_seconds: int = Field(default=300, gt=0)
     rag_worker_poll_seconds: float = Field(default=2.0, gt=0)
+    rag_worker_health_max_age_seconds: float = Field(default=150.0, gt=0)
 
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -45,6 +47,32 @@ class Settings(BaseSettings):
             raise ValueError(
                 "RAG_WORKER_RETRY_MAX_SECONDS must be greater than or equal to "
                 "RAG_WORKER_RETRY_BASE_SECONDS"
+            )
+        if not (
+            self.rag_worker_poll_seconds
+            < self.rag_worker_health_max_age_seconds
+            < self.rag_worker_lock_timeout_seconds
+        ):
+            raise ValueError(
+                "RAG_WORKER_HEALTH_MAX_AGE_SECONDS must be greater than "
+                "RAG_WORKER_POLL_SECONDS and less than "
+                "RAG_WORKER_LOCK_TIMEOUT_SECONDS"
+            )
+        if (
+            self.rag_worker_provider_timeout_seconds
+            >= self.rag_worker_lock_timeout_seconds
+        ):
+            raise ValueError(
+                "RAG_WORKER_PROVIDER_TIMEOUT_SECONDS must be less than "
+                "RAG_WORKER_LOCK_TIMEOUT_SECONDS"
+            )
+        if (
+            self.rag_worker_health_max_age_seconds
+            <= self.rag_worker_provider_timeout_seconds
+        ):
+            raise ValueError(
+                "RAG_WORKER_HEALTH_MAX_AGE_SECONDS must be greater than "
+                "RAG_WORKER_PROVIDER_TIMEOUT_SECONDS"
             )
         return self
 

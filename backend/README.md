@@ -113,9 +113,16 @@ Các biến vận hành:
 - `EMBEDDING_DIMENSION=768` phải khớp migration `vector(768)`; startup fail-fast
   với giá trị khác.
 - `RAG_WORKER_LOCK_TIMEOUT_SECONDS` phải lớn hơn thời gian xử lý/provider tệ nhất.
+- `RAG_WORKER_PROVIDER_TIMEOUT_SECONDS` giới hạn mỗi lần gọi provider và phải nhỏ
+  hơn lease timeout; timeout được phân loại retryable với mã `provider_timeout`.
 - `RAG_WORKER_MAX_ATTEMPTS`, `RAG_WORKER_RETRY_BASE_SECONDS` và
   `RAG_WORKER_RETRY_MAX_SECONDS` điều khiển exponential backoff hữu hạn.
 - `RAG_WORKER_POLL_SECONDS` là thời gian nghỉ khi queue không có job sẵn sàng.
+- `RAG_WORKER_HEALTH_MAX_AGE_SECONDS` là tuổi tối đa của heartbeat file; healthcheck
+  thất bại khi worker/DB iteration treo lâu hơn ngưỡng này. Giá trị nên lớn hơn
+  provider timeout nhưng nhỏ hơn lease timeout.
+- `RAG_WORKER_STOP_GRACE_PERIOD` là Compose stop grace period; mặc định dài hơn
+  provider timeout để iteration đang chạy có thể kết thúc trước `SIGKILL`.
 
 Lỗi retryable trở lại `pending` với `available_at` mới. Lỗi permanent hoặc hết
 lần thử chuyển sang `failed`. `last_error` chỉ lưu mã lỗi kiểm soát, không lưu
@@ -128,3 +135,20 @@ Kiểm tra log và trạng thái worker:
 docker compose ps rag-worker
 docker compose logs rag-worker
 ```
+
+Quan sát queue trực tiếp trong PostgreSQL (không in payload):
+
+```sql
+SELECT status, count(*) FROM rag_index_jobs GROUP BY status;
+SELECT id, source_type, source_id, source_version, attempt_count,
+       available_at, locked_at, last_error
+FROM rag_index_jobs
+WHERE status IN ('pending', 'processing', 'failed')
+ORDER BY created_at, id;
+```
+
+`pending` có `available_at` tương lai là retry đang backoff. `processing` có
+`locked_at` cũ hơn `RAG_WORKER_LOCK_TIMEOUT_SECONDS` sẽ được reclaim ở DB
+iteration kế tiếp. Job `failed` là terminal; sau khi sửa nguyên nhân, thao tác
+reindex phải tạo source version/job mới thay vì sửa hoặc hồi sinh job cũ. Worker
+xử lý `SIGTERM`/`SIGINT`, dừng sau iteration hiện tại và xóa readiness marker.

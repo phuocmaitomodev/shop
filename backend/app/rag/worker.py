@@ -1,10 +1,11 @@
+import asyncio
 import math
 import re
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from uuid import UUID
 
-from sqlalchemy import and_, delete, or_, select, update
+from sqlalchemy import and_, delete, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.models.knowledge import (
@@ -24,6 +25,7 @@ from app.rag.provider import (
 class WorkerOptions:
     embedding_dimension: int = 768
     lock_timeout_seconds: int = 300
+    provider_timeout_seconds: float = 120.0
     max_attempts: int = 5
     retry_base_seconds: int = 5
     retry_max_seconds: int = 300
@@ -66,9 +68,11 @@ class RagIndexWorker:
         return True
 
     async def _claim_next_job(self) -> ClaimedJob | None:
-        now = datetime.now(timezone.utc)
-        stale_before = now - timedelta(seconds=self._options.lock_timeout_seconds)
         async with self._session_factory() as session, session.begin():
+            now = await session.scalar(select(func.now()))
+            if now is None:
+                raise RuntimeError("database clock unavailable")
+            stale_before = now - timedelta(seconds=self._options.lock_timeout_seconds)
             exhausted_jobs = (
                 await session.scalars(
                     select(RagIndexJob)
@@ -99,15 +103,23 @@ class RagIndexWorker:
                     )
                     .values(index_status="failed")
                 )
-            await session.execute(
-                update(RagIndexJob)
-                .where(
-                    RagIndexJob.status == "processing",
-                    RagIndexJob.locked_at < stale_before,
-                    RagIndexJob.attempt_count < self._options.max_attempts,
+            stale_jobs = (
+                await session.scalars(
+                    select(RagIndexJob)
+                    .where(
+                        RagIndexJob.status == "processing",
+                        RagIndexJob.locked_at < stale_before,
+                        RagIndexJob.attempt_count < self._options.max_attempts,
+                    )
+                    .order_by(RagIndexJob.locked_at, RagIndexJob.id)
+                    .with_for_update(skip_locked=True)
+                    .limit(100)
                 )
-                .values(status="pending", locked_at=None, available_at=now)
-            )
+            ).all()
+            for stale_job in stale_jobs:
+                stale_job.status = "pending"
+                stale_job.locked_at = None
+                stale_job.available_at = now
             job = await session.scalar(
                 select(RagIndexJob)
                 .where(
@@ -164,7 +176,13 @@ class RagIndexWorker:
                 raise PermanentIndexingError("inactive_projection_for_upsert")
             chunks = _chunk_text(document.content_for_embedding, self._options.chunk_size)
 
-        vectors = await self._provider.embed(chunks)
+        try:
+            vectors = await asyncio.wait_for(
+                self._provider.embed(chunks),
+                timeout=self._options.provider_timeout_seconds,
+            )
+        except TimeoutError:
+            raise RetryableIndexingError("provider_timeout") from None
         normalized = _validate_and_normalize_vectors(
             vectors,
             expected_count=len(chunks),
@@ -276,8 +294,11 @@ class RagIndexWorker:
             job = await self._lock_owned_job(session, claim)
             if job is None:
                 return
+            now = await session.scalar(select(func.now()))
+            if now is None:
+                raise RuntimeError("database clock unavailable")
             job.status = "pending"
-            job.available_at = datetime.now(timezone.utc) + timedelta(seconds=delay_seconds)
+            job.available_at = now + timedelta(seconds=delay_seconds)
             job.locked_at = None
             job.last_error = code
 
@@ -290,6 +311,7 @@ class RagIndexWorker:
                 RagIndexJob.id == claim.id,
                 RagIndexJob.status == "processing",
                 RagIndexJob.locked_at == claim.locked_at,
+                RagIndexJob.attempt_count == claim.attempt_count,
             )
             .with_for_update()
         )

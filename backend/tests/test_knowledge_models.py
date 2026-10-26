@@ -5,7 +5,7 @@ import pytest
 from sqlalchemy import CheckConstraint, UniqueConstraint
 from sqlalchemy.exc import IntegrityError
 
-from app.models.knowledge import KnowledgeDocument, RagDocument, RagIndexJob
+from app.models.knowledge import KnowledgeDocument, RagChunk, RagDocument, RagIndexJob
 
 
 def _constraint_names(model, constraint_type):
@@ -14,6 +14,20 @@ def _constraint_names(model, constraint_type):
         for constraint in model.__table__.constraints
         if isinstance(constraint, constraint_type)
     }
+
+
+def test_rag_chunk_metadata_declares_postgres_retrieval_indexes() -> None:
+    indexes = {index.name: index for index in RagChunk.__table__.indexes}
+
+    assert indexes["ix_rag_chunks_embedding_hnsw"].dialect_options["postgresql"][
+        "using"
+    ] == "hnsw"
+    assert indexes["ix_rag_chunks_embedding_hnsw"].dialect_options["postgresql"][
+        "ops"
+    ] == {"embedding": "vector_cosine_ops"}
+    assert indexes["ix_rag_chunks_content_fts"].dialect_options["postgresql"][
+        "using"
+    ] == "gin"
 
 
 def test_knowledge_and_index_models_publish_stable_contract() -> None:

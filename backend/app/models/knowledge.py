@@ -122,6 +122,17 @@ class RagChunk(TimestampMixin, Base):
             name="uq_rag_chunk_document_version_index",
         ),
         Index("ix_rag_chunks_document_active", "rag_document_id", "is_active"),
+        Index(
+            "ix_rag_chunks_embedding_hnsw",
+            "embedding",
+            postgresql_using="hnsw",
+            postgresql_ops={"embedding": "vector_cosine_ops"},
+        ).ddl_if(dialect="postgresql"),
+        Index(
+            "ix_rag_chunks_content_fts",
+            text("to_tsvector('simple', content)"),
+            postgresql_using="gin",
+        ).ddl_if(dialect="postgresql"),
     )
 
     id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)

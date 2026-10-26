@@ -7,7 +7,7 @@ from sqlalchemy import func, select, update
 
 from app.models.knowledge import RagChunk, RagDocument, RagIndexJob
 from app.rag.provider import DeterministicEmbeddingProvider, RetryableIndexingError
-from app.rag.worker import RagIndexWorker, WorkerOptions
+from app.rag.worker import ClaimedJob, RagIndexWorker, WorkerOptions
 
 
 def test_worker_indexes_pending_job_once(auth_session_factory) -> None:
@@ -116,7 +116,9 @@ def test_retryable_failure_is_scheduled_then_succeeds(auth_session_factory) -> N
             assert job.locked_at is None
             assert job.last_error == "provider_temporarily_unavailable"
             available_at = job.available_at.replace(tzinfo=timezone.utc)
-            assert available_at >= before + timedelta(seconds=7)
+            # SQLite's database clock is second-precision; PostgreSQL preserves
+            # sub-second precision. Both schedule from the database clock.
+            assert available_at >= before + timedelta(seconds=6)
             await session.execute(
                 update(RagIndexJob).values(
                     available_at=datetime.now(timezone.utc) - timedelta(seconds=1)
@@ -517,3 +519,111 @@ def test_job_newer_than_projection_is_retried(
             assert document.index_status == "pending"
 
     asyncio.run(exercise_worker())
+
+
+def test_attempt_count_fences_old_claim_when_lease_timestamp_is_reused(
+    auth_session_factory,
+) -> None:
+    async def exercise_old_claim() -> None:
+        source_id = uuid4()
+        locked_at = datetime.now(timezone.utc)
+        async with auth_session_factory() as session:
+            document = RagDocument(
+                source_type="knowledge",
+                source_id=source_id,
+                title="FAQ",
+                content_for_embedding="Nội dung",
+                source_version=1,
+                checksum="5" * 64,
+            )
+            job = RagIndexJob(
+                source_type="knowledge",
+                source_id=source_id,
+                source_version=1,
+                event_type="upsert",
+                payload={},
+                status="processing",
+                attempt_count=2,
+                locked_at=locked_at,
+            )
+            session.add_all([document, job])
+            await session.commit()
+            job_id = job.id
+
+        old_claim = ClaimedJob(
+            id=job_id,
+            locked_at=locked_at,
+            source_type="knowledge",
+            source_id=source_id,
+            source_version=1,
+            event_type="upsert",
+            payload_version=1,
+            attempt_count=1,
+        )
+        worker = RagIndexWorker(
+            auth_session_factory,
+            DeterministicEmbeddingProvider(dimension=768),
+            WorkerOptions(embedding_dimension=768),
+        )
+        await worker._fail_permanently(old_claim, "obsolete_worker_failure")
+
+        async with auth_session_factory() as session:
+            stored_job = await session.get(RagIndexJob, job_id)
+            stored_document = await session.scalar(select(RagDocument))
+            assert stored_job is not None
+            assert stored_job.status == "processing"
+            assert stored_job.attempt_count == 2
+            assert stored_job.last_error is None
+            assert stored_document is not None
+            assert stored_document.index_status == "pending"
+
+    asyncio.run(exercise_old_claim())
+
+
+def test_provider_timeout_is_scheduled_as_retryable(auth_session_factory) -> None:
+    class HangingProvider(DeterministicEmbeddingProvider):
+        async def embed(self, texts):
+            await asyncio.sleep(60)
+            return await super().embed(texts)
+
+    async def exercise_timeout() -> None:
+        source_id = uuid4()
+        async with auth_session_factory() as session:
+            session.add_all(
+                [
+                    RagDocument(
+                        source_type="knowledge",
+                        source_id=source_id,
+                        title="FAQ",
+                        content_for_embedding="Nội dung",
+                        source_version=1,
+                        checksum="6" * 64,
+                    ),
+                    RagIndexJob(
+                        source_type="knowledge",
+                        source_id=source_id,
+                        source_version=1,
+                        event_type="upsert",
+                        payload={},
+                    ),
+                ]
+            )
+            await session.commit()
+
+        worker = RagIndexWorker(
+            auth_session_factory,
+            HangingProvider(dimension=768),
+            WorkerOptions(
+                embedding_dimension=768,
+                provider_timeout_seconds=0.01,
+            ),
+        )
+        assert await worker.run_once() is True
+
+        async with auth_session_factory() as session:
+            job = await session.scalar(select(RagIndexJob))
+            assert job is not None
+            assert job.status == "pending"
+            assert job.last_error == "provider_timeout"
+
+    asyncio.run(exercise_timeout())
