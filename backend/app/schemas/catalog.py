@@ -37,9 +37,11 @@ class ProductCardResponse(BaseModel):
     price: int
     sale_price: int | None
     effective_price: int
+    category: CategoryResponse
     labels: list[str]
     available_sizes: list[str]
     available_colors: list[ColorResponse]
+    in_stock: bool
 
 
 class ProductPageData(BaseModel):

@@ -164,11 +164,19 @@ def test_list_products_returns_public_product_cards(
         "price": 299_000,
         "sale_price": 249_000,
         "effective_price": 249_000,
+        "category": {
+            "id": product["category"]["id"],
+            "name": "Áo thun",
+            "slug": "ao-thun",
+            "description": "Áo thun nam nữ",
+            "sort_order": 1,
+        },
         "labels": ["Giảm giá", "Mới"],
         "available_sizes": ["M"],
         "available_colors": [
             {"id": product["available_colors"][0]["id"], "name": "Đen", "hex_code": "#000000"}
         ],
+        "in_stock": True,
     }
     assert isinstance(product["price"], int)
     assert "created_at" not in product

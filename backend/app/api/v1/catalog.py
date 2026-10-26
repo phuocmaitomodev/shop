@@ -1,11 +1,18 @@
-from fastapi import APIRouter, Depends, Query, Request, status
-from sqlalchemy import func, select
+from fastapi import APIRouter, Depends, Path, Query, Request, status
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.core.errors import AppError
 from app.db.session import get_db_session
-from app.models.catalog import Category, Product, ProductLabel, ProductVariant
+from app.models.catalog import (
+    Category,
+    Color,
+    Product,
+    ProductLabel,
+    ProductVariant,
+    Size,
+)
 from app.schemas.catalog import (
     CategoryListEnvelope,
     CategoryResponse,
@@ -22,6 +29,15 @@ from app.schemas.catalog import (
 from app.schemas.common import ErrorEnvelope
 
 router = APIRouter(tags=["catalog"])
+MAX_BIGINT = 9_223_372_036_854_775_807
+MAX_PAGE = 1_000_000
+
+
+def _like_pattern(value: str) -> str:
+    escaped = (
+        value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    )
+    return f"%{escaped}%"
 
 
 def _request_meta(request: Request) -> dict[str, str]:
@@ -78,6 +94,7 @@ def _card_response(product: Product) -> ProductCardResponse:
         price=product.price,
         sale_price=product.sale_price,
         effective_price=product.sale_price if product.sale_price is not None else product.price,
+        category=_category_response(product.category),
         labels=_labels(product),
         available_sizes=[
             size.code
@@ -87,6 +104,7 @@ def _card_response(product: Product) -> ProductCardResponse:
             ColorResponse(id=color.id, name=color.name, hex_code=color.hex_code)
             for color in sorted(colors_by_id.values(), key=lambda color: color.name)
         ],
+        in_stock=bool(available_variants),
     )
 
 
@@ -130,26 +148,110 @@ async def list_categories(
 )
 async def list_products(
     request: Request,
-    page: int = Query(default=1, ge=1),
-    page_size: int = Query(default=20, ge=1, le=100),
+    page: int = Query(default=1, ge=1, le=MAX_PAGE, examples=[1]),
+    page_size: int = Query(default=20, ge=1, le=100, examples=[20]),
+    q: str | None = Query(
+        default=None,
+        max_length=200,
+        description="Tìm không phân biệt hoa thường trong tên và mô tả.",
+        examples=["áo cotton"],
+    ),
+    category: str | None = Query(
+        default=None,
+        max_length=140,
+        description="Slug danh mục.",
+        examples=["ao-thun"],
+    ),
+    min_price: int | None = Query(
+        default=None,
+        ge=0,
+        le=MAX_BIGINT,
+        description="Giá hiệu lực tối thiểu (VND).",
+    ),
+    max_price: int | None = Query(
+        default=None,
+        ge=0,
+        le=MAX_BIGINT,
+        description="Giá hiệu lực tối đa (VND).",
+    ),
+    color: str | None = Query(
+        default=None,
+        max_length=120,
+        description="Slug màu của biến thể đang còn hàng.",
+        examples=["den"],
+    ),
+    size: str | None = Query(
+        default=None,
+        max_length=20,
+        description="Mã size của biến thể đang còn hàng.",
+        examples=["M"],
+    ),
     session: AsyncSession = Depends(get_db_session),
 ) -> dict:
-    public_filter = (
+    if min_price is not None and max_price is not None and min_price > max_price:
+        raise AppError(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            code="VALIDATION_ERROR",
+            message="Khoảng giá không hợp lệ.",
+            fields={"min_price": "Phải nhỏ hơn hoặc bằng max_price."},
+        )
+
+    filters = [
         Product.is_active.is_(True),
         Product.deleted_at.is_(None),
         Category.is_active.is_(True),
-    )
+    ]
+    if q and (normalized_query := q.strip()):
+        pattern = _like_pattern(normalized_query)
+        filters.append(
+            or_(
+                Product.name.ilike(pattern, escape="\\"),
+                Product.description.ilike(pattern, escape="\\"),
+            )
+        )
+    if category and (normalized_category := category.strip()):
+        filters.append(Category.slug == normalized_category.lower())
+
+    effective_price = func.coalesce(Product.sale_price, Product.price)
+    if min_price is not None:
+        filters.append(effective_price >= min_price)
+    if max_price is not None:
+        filters.append(effective_price <= max_price)
+
+    normalized_color = color.strip().lower() if color else None
+    normalized_size = size.strip().lower() if size else None
+    if normalized_color or normalized_size:
+        variant_filters = [
+            ProductVariant.product_id == Product.id,
+            ProductVariant.is_active.is_(True),
+            ProductVariant.stock_quantity > 0,
+            Color.is_active.is_(True),
+            Size.is_active.is_(True),
+        ]
+        if normalized_color:
+            variant_filters.append(func.lower(Color.slug) == normalized_color)
+        if normalized_size:
+            variant_filters.append(func.lower(Size.code) == normalized_size)
+        filters.append(
+            select(1)
+            .select_from(ProductVariant)
+            .join(Color, Color.id == ProductVariant.color_id)
+            .join(Size, Size.id == ProductVariant.size_id)
+            .where(*variant_filters)
+            .exists()
+        )
+
     total = await session.scalar(
         select(func.count())
         .select_from(Product)
         .join(Category, Category.id == Product.category_id)
-        .where(*public_filter)
+        .where(*filters)
     )
     products = (
         await session.scalars(
             select(Product)
             .join(Category, Category.id == Product.category_id)
-            .where(*public_filter)
+            .where(*filters)
             .options(*_product_load_options())
             .order_by(Product.name, Product.id)
             .offset((page - 1) * page_size)
@@ -182,8 +284,8 @@ async def list_products(
     },
 )
 async def get_product_detail(
-    slug: str,
     request: Request,
+    slug: str = Path(min_length=1, max_length=180, examples=["ao-thun-basic"]),
     session: AsyncSession = Depends(get_db_session),
 ) -> dict:
     product = await session.scalar(
@@ -208,7 +310,6 @@ async def get_product_detail(
     detail = ProductDetailResponse(
         **card.model_dump(),
         description=product.description,
-        category=_category_response(product.category),
         images=[
             ProductImageResponse(
                 id=image.id,
