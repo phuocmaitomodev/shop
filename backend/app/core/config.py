@@ -20,6 +20,15 @@ class Settings(BaseSettings):
     auth_rate_limit_window_seconds: int = Field(default=60, gt=0)
     auth_rate_limit_max_keys: int = Field(default=10_000, gt=0)
     forgot_response_floor_ms: int = Field(default=250, ge=0)
+    rag_embedding_provider: Literal["stub"] = "stub"
+    embedding_dimension: int = Field(default=768, gt=0)
+    rag_worker_lock_timeout_seconds: int = Field(default=300, gt=0)
+    rag_worker_provider_timeout_seconds: float = Field(default=120.0, gt=0)
+    rag_worker_max_attempts: int = Field(default=5, gt=0)
+    rag_worker_retry_base_seconds: int = Field(default=5, gt=0)
+    rag_worker_retry_max_seconds: int = Field(default=300, gt=0)
+    rag_worker_poll_seconds: float = Field(default=2.0, gt=0)
+    rag_worker_health_max_age_seconds: float = Field(default=150.0, gt=0)
 
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -32,6 +41,39 @@ class Settings(BaseSettings):
     def require_secure_production_cookie(self) -> "Settings":
         if self.app_env == "production" and not self.auth_cookie_secure:
             raise ValueError("AUTH_COOKIE_SECURE must be true in production")
+        if self.embedding_dimension != 768:
+            raise ValueError("EMBEDDING_DIMENSION must be 768 for the current migration")
+        if self.rag_worker_retry_max_seconds < self.rag_worker_retry_base_seconds:
+            raise ValueError(
+                "RAG_WORKER_RETRY_MAX_SECONDS must be greater than or equal to "
+                "RAG_WORKER_RETRY_BASE_SECONDS"
+            )
+        if not (
+            self.rag_worker_poll_seconds
+            < self.rag_worker_health_max_age_seconds
+            < self.rag_worker_lock_timeout_seconds
+        ):
+            raise ValueError(
+                "RAG_WORKER_HEALTH_MAX_AGE_SECONDS must be greater than "
+                "RAG_WORKER_POLL_SECONDS and less than "
+                "RAG_WORKER_LOCK_TIMEOUT_SECONDS"
+            )
+        if (
+            self.rag_worker_provider_timeout_seconds
+            >= self.rag_worker_lock_timeout_seconds
+        ):
+            raise ValueError(
+                "RAG_WORKER_PROVIDER_TIMEOUT_SECONDS must be less than "
+                "RAG_WORKER_LOCK_TIMEOUT_SECONDS"
+            )
+        if (
+            self.rag_worker_health_max_age_seconds
+            <= self.rag_worker_provider_timeout_seconds
+        ):
+            raise ValueError(
+                "RAG_WORKER_HEALTH_MAX_AGE_SECONDS must be greater than "
+                "RAG_WORKER_PROVIDER_TIMEOUT_SECONDS"
+            )
         return self
 
 

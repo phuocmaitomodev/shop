@@ -144,11 +144,11 @@ Lớp chuẩn hóa cho mọi source có embedding:
 ### `rag_chunks`
 
 - `id`, `rag_document_id`, `chunk_index`, `content`, `metadata jsonb`.
-- `embedding vector(EMBEDDING_DIMENSION)`, `embedding_model`, `source_version`, `is_active`, timestamps.
+- `embedding vector(768)`, `embedding_model`, `source_version`, `is_active`, timestamps.
 - Unique `(rag_document_id, source_version, chunk_index)`.
 - Vector index HNSW/IVFFlat tùy dataset; thêm FTS GIN index cho hybrid keyword.
 
-`EMBEDDING_DIMENSION` phải được chốt trước migration và khớp model; thay model khác dimension cần migration/reindex rõ ràng, không âm thầm trộn vectors.
+`EMBEDDING_DIMENSION=768` đã được khóa cho migration hiện tại; thay model khác dimension cần migration/reindex rõ ràng, không âm thầm trộn vectors.
 
 ### `rag_index_jobs`
 

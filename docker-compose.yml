@@ -54,6 +54,66 @@ services:
       start_period: 10s
     restart: unless-stopped
 
+  migration-test:
+    profiles: ["test"]
+    build:
+      context: ./backend
+      target: test
+    environment:
+      APP_ENV: test
+      APP_SECRET_KEY: migration-test-only-secret
+      DATABASE_URL: ${DATABASE_URL:?Set DATABASE_URL in .env}
+      MIGRATION_DATABASE_URL: ${DATABASE_URL:?Set DATABASE_URL in .env}
+    depends_on:
+      db:
+        condition: service_healthy
+    command:
+      [
+        "pytest",
+        "-W",
+        "error",
+        "tests/integration/test_postgres_migrations.py",
+        "tests/test_rag_index_postgres.py",
+        "-v",
+      ]
+
+  rag-worker:
+    build:
+      context: ./backend
+      target: runtime
+    command: ["python", "-m", "app.rag.run_worker"]
+    environment:
+      APP_ENV: ${APP_ENV:-development}
+      APP_SECRET_KEY: ${APP_SECRET_KEY:?Set APP_SECRET_KEY in .env}
+      DATABASE_URL: ${DATABASE_URL:?Set DATABASE_URL in .env}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      RAG_EMBEDDING_PROVIDER: ${RAG_EMBEDDING_PROVIDER:-stub}
+      EMBEDDING_DIMENSION: ${EMBEDDING_DIMENSION:-768}
+      RAG_WORKER_LOCK_TIMEOUT_SECONDS: ${RAG_WORKER_LOCK_TIMEOUT_SECONDS:-300}
+      RAG_WORKER_PROVIDER_TIMEOUT_SECONDS: ${RAG_WORKER_PROVIDER_TIMEOUT_SECONDS:-120}
+      RAG_WORKER_MAX_ATTEMPTS: ${RAG_WORKER_MAX_ATTEMPTS:-5}
+      RAG_WORKER_RETRY_BASE_SECONDS: ${RAG_WORKER_RETRY_BASE_SECONDS:-5}
+      RAG_WORKER_RETRY_MAX_SECONDS: ${RAG_WORKER_RETRY_MAX_SECONDS:-300}
+      RAG_WORKER_POLL_SECONDS: ${RAG_WORKER_POLL_SECONDS:-2}
+      RAG_WORKER_HEALTH_MAX_AGE_SECONDS: ${RAG_WORKER_HEALTH_MAX_AGE_SECONDS:-150}
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-m",
+          "app.rag.healthcheck",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+    restart: unless-stopped
+    stop_grace_period: ${RAG_WORKER_STOP_GRACE_PERIOD:-130s}
+
   frontend:
     build:
       context: ./frontend

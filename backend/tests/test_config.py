@@ -40,3 +40,72 @@ def test_auth_ttls_must_be_positive(monkeypatch) -> None:
 
     with pytest.raises(ValidationError):
         Settings(_env_file=None)
+
+
+def test_rag_worker_settings_have_safe_defaults(monkeypatch) -> None:
+    monkeypatch.setenv("APP_ENV", "test")
+    monkeypatch.setenv("APP_SECRET_KEY", "test-only-secret")
+    monkeypatch.setenv("DATABASE_URL", "postgresql+asyncpg://shop:shop@db:5432/shop")
+    monkeypatch.delenv("EMBEDDING_DIMENSION", raising=False)
+
+    settings = Settings(_env_file=None)
+
+    assert settings.rag_embedding_provider == "stub"
+    assert settings.embedding_dimension == 768
+    assert settings.rag_worker_lock_timeout_seconds == 300
+    assert settings.rag_worker_provider_timeout_seconds == 120.0
+    assert settings.rag_worker_max_attempts == 5
+    assert settings.rag_worker_retry_base_seconds == 5
+    assert settings.rag_worker_retry_max_seconds == 300
+    assert settings.rag_worker_poll_seconds == 2.0
+    assert settings.rag_worker_health_max_age_seconds == 150.0
+
+
+def test_embedding_dimension_must_match_migrated_vector_dimension(monkeypatch) -> None:
+    monkeypatch.setenv("APP_ENV", "test")
+    monkeypatch.setenv("APP_SECRET_KEY", "test-only-secret")
+    monkeypatch.setenv("DATABASE_URL", "postgresql+asyncpg://shop:shop@db:5432/shop")
+    monkeypatch.setenv("EMBEDDING_DIMENSION", "1536")
+
+    with pytest.raises(ValidationError, match="EMBEDDING_DIMENSION must be 768"):
+        Settings(_env_file=None)
+
+
+@pytest.mark.parametrize(
+    (
+        "poll_seconds",
+        "health_max_age_seconds",
+        "provider_timeout_seconds",
+        "lock_timeout_seconds",
+    ),
+    [
+        (10, 5, 120, 300),
+        (2, 300, 120, 300),
+        (2, 150, 300, 300),
+        (2, 100, 120, 300),
+    ],
+)
+def test_worker_health_window_must_be_between_poll_and_lease(
+    monkeypatch,
+    poll_seconds: int,
+    health_max_age_seconds: int,
+    provider_timeout_seconds: int,
+    lock_timeout_seconds: int,
+) -> None:
+    monkeypatch.setenv("APP_ENV", "test")
+    monkeypatch.setenv("APP_SECRET_KEY", "test-only-secret")
+    monkeypatch.setenv("DATABASE_URL", "postgresql+asyncpg://shop:shop@db:5432/shop")
+    monkeypatch.setenv("RAG_WORKER_POLL_SECONDS", str(poll_seconds))
+    monkeypatch.setenv(
+        "RAG_WORKER_HEALTH_MAX_AGE_SECONDS", str(health_max_age_seconds)
+    )
+    monkeypatch.setenv(
+        "RAG_WORKER_PROVIDER_TIMEOUT_SECONDS", str(provider_timeout_seconds)
+    )
+    monkeypatch.setenv("RAG_WORKER_LOCK_TIMEOUT_SECONDS", str(lock_timeout_seconds))
+
+    with pytest.raises(
+        ValidationError,
+        match="RAG_WORKER_(HEALTH_MAX_AGE|PROVIDER_TIMEOUT)_SECONDS",
+    ):
+        Settings(_env_file=None)
