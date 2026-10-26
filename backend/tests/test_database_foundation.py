@@ -51,7 +51,23 @@ def test_catalog_business_tables_have_timestamps() -> None:
         )
 
 
-def test_alembic_has_single_loadable_catalog_head_that_enables_pgvector(
+def test_rag_content_metadata_defines_required_tables() -> None:
+    assert {
+        "knowledge_documents",
+        "rag_documents",
+        "rag_index_jobs",
+    } <= set(metadata.tables)
+    for table_name in {
+        "knowledge_documents",
+        "rag_documents",
+        "rag_index_jobs",
+    }:
+        assert {"created_at", "updated_at"} <= set(
+            metadata.tables[table_name].columns.keys()
+        )
+
+
+def test_alembic_has_single_loadable_rag_content_head_that_enables_pgvector(
     monkeypatch,
 ) -> None:
     backend_dir = Path(__file__).resolve().parents[1]
@@ -60,10 +76,10 @@ def test_alembic_has_single_loadable_catalog_head_that_enables_pgvector(
     scripts = ScriptDirectory.from_config(config)
 
     heads = scripts.get_heads()
-    assert heads == ["0003_catalog"]
+    assert heads == ["0004_rag_content"]
 
-    catalog_revision = scripts.get_revision(heads[0])
-    assert catalog_revision.down_revision == "0002_identity_auth"
+    rag_content_revision = scripts.get_revision(heads[0])
+    assert rag_content_revision.down_revision == "0003_catalog"
 
     revision = scripts.get_revision("0001_enable_pgvector")
     executed_sql = []
