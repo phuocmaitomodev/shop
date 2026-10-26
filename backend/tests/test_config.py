@@ -51,6 +51,8 @@ def test_rag_worker_settings_have_safe_defaults(monkeypatch) -> None:
     settings = Settings(_env_file=None)
 
     assert settings.rag_embedding_provider == "stub"
+    assert settings.gemini_api_key is None
+    assert settings.gemini_embedding_model is None
     assert settings.embedding_dimension == 768
     assert settings.rag_worker_lock_timeout_seconds == 300
     assert settings.rag_worker_provider_timeout_seconds == 120.0
@@ -59,6 +61,36 @@ def test_rag_worker_settings_have_safe_defaults(monkeypatch) -> None:
     assert settings.rag_worker_retry_max_seconds == 300
     assert settings.rag_worker_poll_seconds == 2.0
     assert settings.rag_worker_health_max_age_seconds == 150.0
+
+
+def test_gemini_embedding_provider_requires_key_and_model(monkeypatch) -> None:
+    monkeypatch.setenv("APP_ENV", "test")
+    monkeypatch.setenv("APP_SECRET_KEY", "test-only-secret")
+    monkeypatch.setenv("DATABASE_URL", "postgresql+asyncpg://shop:shop@db:5432/shop")
+    monkeypatch.setenv("RAG_EMBEDDING_PROVIDER", "gemini")
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.delenv("GEMINI_EMBEDDING_MODEL", raising=False)
+
+    with pytest.raises(
+        ValidationError, match="GEMINI_API_KEY and GEMINI_EMBEDDING_MODEL"
+    ):
+        Settings(_env_file=None)
+
+
+def test_gemini_embedding_provider_loads_secret_and_model(monkeypatch) -> None:
+    monkeypatch.setenv("APP_ENV", "test")
+    monkeypatch.setenv("APP_SECRET_KEY", "test-only-secret")
+    monkeypatch.setenv("DATABASE_URL", "postgresql+asyncpg://shop:shop@db:5432/shop")
+    monkeypatch.setenv("RAG_EMBEDDING_PROVIDER", "gemini")
+    monkeypatch.setenv("GEMINI_API_KEY", "configured-test-key")
+    monkeypatch.setenv("GEMINI_EMBEDDING_MODEL", "configured-model")
+
+    settings = Settings(_env_file=None)
+
+    assert settings.rag_embedding_provider == "gemini"
+    assert settings.gemini_api_key is not None
+    assert settings.gemini_api_key.get_secret_value() == "configured-test-key"
+    assert settings.gemini_embedding_model == "configured-model"
 
 
 def test_embedding_dimension_must_match_migrated_vector_dimension(monkeypatch) -> None:

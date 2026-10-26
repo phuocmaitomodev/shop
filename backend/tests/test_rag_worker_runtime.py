@@ -2,8 +2,11 @@ import asyncio
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
+from pydantic import SecretStr
+
 from app.rag import run_worker as run_worker_module
 from app.rag.healthcheck import DEFAULT_MAX_AGE_SECONDS, is_ready_file_fresh
+from app.rag.provider import DeterministicEmbeddingProvider, GeminiEmbeddingProvider
 from app.rag.run_worker import run_worker_loop
 
 
@@ -73,6 +76,29 @@ def test_worker_loop_stops_without_waiting_full_poll_interval_and_cleans_marker(
     asyncio.run(exercise())
 
 
+def test_build_embedding_provider_selects_stub_or_gemini_from_settings() -> None:
+    common = {
+        "embedding_dimension": 768,
+        "gemini_api_key": None,
+        "gemini_embedding_model": None,
+    }
+    stub = run_worker_module._build_embedding_provider(
+        SimpleNamespace(rag_embedding_provider="stub", **common)
+    )
+    gemini = run_worker_module._build_embedding_provider(
+        SimpleNamespace(
+            rag_embedding_provider="gemini",
+            embedding_dimension=768,
+            gemini_api_key=SecretStr("configured-test-key"),
+            gemini_embedding_model="configured-model",
+        )
+    )
+
+    assert isinstance(stub, DeterministicEmbeddingProvider)
+    assert isinstance(gemini, GeminiEmbeddingProvider)
+    assert gemini.model_name == "configured-model"
+
+
 def test_run_configures_logging_before_lifecycle_events_without_sensitive_fields(
     monkeypatch,
 ) -> None:
@@ -82,6 +108,7 @@ def test_run_configures_logging_before_lifecycle_events_without_sensitive_fields
         app_secret_key=sensitive_value,
         database_url=sensitive_value,
         log_level="DEBUG",
+        rag_embedding_provider="stub",
         embedding_dimension=768,
         rag_worker_lock_timeout_seconds=300,
         rag_worker_provider_timeout_seconds=120,

@@ -12,6 +12,8 @@ cp .env.example .env
 docker compose up --build -d
 docker compose ps
 docker compose exec api alembic upgrade head
+docker compose exec api python -m app.cli.seed_catalog
+docker compose exec api python -m app.cli.reindex_products
 ```
 
 Trước khi chia sẻ môi trường, thay các giá trị `change-me-*` trong `.env` và giữ
@@ -28,6 +30,8 @@ Các địa chỉ local mặc định:
 `rag-worker` claim outbox bằng `FOR UPDATE SKIP LOCKED`, dùng lease để phục hồi
 job bị gián đoạn và chạy provider deterministic offline theo mặc định. Xem cấu
 hình retry và hướng dẫn vận hành trong [`backend/README.md`](backend/README.md).
+Đặt `RAG_EMBEDDING_PROVIDER=gemini` cùng `GEMINI_API_KEY` và
+`GEMINI_EMBEDDING_MODEL` trong `.env` để dùng Gemini; không cần key khi dùng stub.
 
 ## Kiểm tra và dọn môi trường
 
@@ -71,6 +75,6 @@ schema pgvector cùng cơ chế claim/lease PostgreSQL hoạt động. Luôn ch�
 docker compose down --volumes
 ```
 
-Hướng dẫn backend, migration, auth, catalog và RAG worker chi tiết nằm trong
-[`backend/README.md`](backend/README.md). Seed dữ liệu demo sẽ được bổ sung bởi
-task BE-06; không có seed ngầm khi khởi động Compose.
+Hướng dẫn backend, migration, catalog seed/reindex và RAG worker chi tiết nằm trong
+[`backend/README.md`](backend/README.md). Không có seed hoặc reindex ngầm khi khởi
+động Compose.

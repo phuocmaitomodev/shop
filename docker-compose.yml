@@ -73,6 +73,7 @@ services:
         "-W",
         "error",
         "tests/integration/test_postgres_migrations.py",
+        "tests/integration/test_product_projection_postgres.py",
         "tests/test_rag_index_postgres.py",
         "-v",
       ]
@@ -88,6 +89,8 @@ services:
       DATABASE_URL: ${DATABASE_URL:?Set DATABASE_URL in .env}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       RAG_EMBEDDING_PROVIDER: ${RAG_EMBEDDING_PROVIDER:-stub}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      GEMINI_EMBEDDING_MODEL: ${GEMINI_EMBEDDING_MODEL:-}
       EMBEDDING_DIMENSION: ${EMBEDDING_DIMENSION:-768}
       RAG_WORKER_LOCK_TIMEOUT_SECONDS: ${RAG_WORKER_LOCK_TIMEOUT_SECONDS:-300}
       RAG_WORKER_PROVIDER_TIMEOUT_SECONDS: ${RAG_WORKER_PROVIDER_TIMEOUT_SECONDS:-120}

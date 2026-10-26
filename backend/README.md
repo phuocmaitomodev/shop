@@ -8,7 +8,7 @@ From the repository root, create the untracked runtime environment file:
 cp .env.example .env
 ```
 
-Replace the placeholder application and database secrets before sharing the environment. Gemini values are reserved for later RAG tasks and are not used by the foundation or authentication tasks.
+Replace the placeholder application and database secrets before sharing the environment. Keep `RAG_EMBEDDING_PROVIDER=stub` for deterministic offline development, or configure the Gemini values described below.
 When changing the PostgreSQL password, update the URL-encoded password in `DATABASE_URL` to match it.
 
 ## Run API and PostgreSQL
@@ -61,10 +61,51 @@ Public registration always creates a `customer`. Admin accounts are created by t
 BE-05 adds the catalog migration `0003_catalog` and these public endpoints under `/api/v1`:
 
 - `GET /categories` — active categories ordered by `sort_order`.
-- `GET /products?page=1&page_size=20` — active product cards with exact integer VND prices, primary image, labels, and in-stock color/size availability.
+- `GET /products?page=1&page_size=20` — active product cards with exact integer VND prices, primary image, labels, and in-stock color/size availability. Optional `q`, `category`, `min_price`, `max_price`, `color`, and `size` parameters can be combined.
 - `GET /products/{slug}` — product detail with category, ordered images, labels, and active variants with live stock quantities.
 
-Products in inactive categories, inactive products, and soft-deleted products are not exposed. Inactive variants are omitted; active zero-stock variants remain in detail responses with `is_available=false`. Search, facets, filters, sorting, and related products are intentionally deferred to BE-07.
+Products in inactive categories, inactive products, and soft-deleted products are not exposed. Inactive variants are omitted; active zero-stock variants remain in detail responses with `is_available=false`. Search and catalog filters are implemented; facets, sorting, and related products remain outside the current MVP contract.
+
+### Deterministic demo catalog
+
+After applying migrations, create or restore the canonical MVP dataset with:
+
+```bash
+docker compose --env-file .env.example run --rm api python -m app.cli.seed_catalog
+```
+
+The seed owns stable UUID/SKU/slug identities for 20 products in four categories,
+plus their colors, sizes, primary placeholder images and 60 variants. Re-running it
+updates those canonical rows in place and does not delete unrelated catalog data.
+If an unrelated row already owns a canonical slug or SKU, the command exits nonzero
+and rolls back instead of replacing that row.
+
+Verify required fields, identities, relationships, prices, stock and idempotence by
+running the verifier. The verifier intentionally performs one additional seed pass
+and compares the persisted business-data snapshot before committing:
+
+```bash
+docker compose --env-file .env.example run --rm api python -m app.cli.verify_catalog
+```
+
+Both commands exit `0` on success and `1` on a validation, collision or database
+error. Seed images use the internal `/media/placeholders/catalog-product.svg` asset
+served by the API container.
+
+### Product projection and reindex
+
+After seeding, synchronize public catalog products into the durable RAG projection
+and enqueue changed versions with:
+
+```bash
+docker compose --env-file .env.example run --rm api python -m app.cli.reindex_products
+```
+
+The command is idempotent: unchanged products do not create another job. Name,
+category and description are projected for semantic retrieval. Price, sale price,
+color, size and stock are deliberately excluded and must be hydrated from PostgreSQL
+when answering a chat request. Inactive, soft-deleted, category-inactive and orphaned
+products enqueue a versioned delete event.
 
 ## Tests and verification
 
@@ -110,6 +151,10 @@ transaction. Job `processing` có lease quá hạn được đưa lại về `pe
 
 Các biến vận hành:
 
+- `RAG_EMBEDDING_PROVIDER=stub|gemini` chọn provider. Với `gemini`, phải cấu hình
+  cả `GEMINI_API_KEY` và `GEMINI_EMBEDDING_MODEL`; worker fail-fast nếu thiếu.
+- Gemini key chỉ được gửi trong header `x-goog-api-key`, không được ghi log hoặc
+  commit. Adapter yêu cầu output 768 chiều và chuẩn hóa L2 trước khi lưu.
 - `EMBEDDING_DIMENSION=768` phải khớp migration `vector(768)`; startup fail-fast
   với giá trị khác.
 - `RAG_WORKER_LOCK_TIMEOUT_SECONDS` phải lớn hơn thời gian xử lý/provider tệ nhất.
