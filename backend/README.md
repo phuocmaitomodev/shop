@@ -66,6 +66,32 @@ BE-05 adds the catalog migration `0003_catalog` and these public endpoints under
 
 Products in inactive categories, inactive products, and soft-deleted products are not exposed. Inactive variants are omitted; active zero-stock variants remain in detail responses with `is_available=false`. Search, facets, filters, sorting, and related products are intentionally deferred to BE-07.
 
+### Deterministic demo catalog
+
+After applying migrations, create or restore the canonical MVP dataset with:
+
+```bash
+docker compose --env-file .env.example run --rm api python -m app.cli.seed_catalog
+```
+
+The seed owns stable UUID/SKU/slug identities for 20 products in four categories,
+plus their colors, sizes, primary placeholder images and 60 variants. Re-running it
+updates those canonical rows in place and does not delete unrelated catalog data.
+If an unrelated row already owns a canonical slug or SKU, the command exits nonzero
+and rolls back instead of replacing that row.
+
+Verify required fields, identities, relationships, prices, stock and idempotence by
+running the verifier. The verifier intentionally performs one additional seed pass
+and compares the persisted business-data snapshot before committing:
+
+```bash
+docker compose --env-file .env.example run --rm api python -m app.cli.verify_catalog
+```
+
+Both commands exit `0` on success and `1` on a validation, collision or database
+error. Seed images use the internal `/media/placeholders/catalog-product.svg` asset
+served by the API container.
+
 ## Tests and verification
 
 ```bash
