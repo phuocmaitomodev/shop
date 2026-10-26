@@ -11,7 +11,7 @@ class Settings(BaseSettings):
     app_secret_key: SecretStr
     database_url: PostgresDsn
     log_level: str = "INFO"
-    cors_allowed_origins: list[str] = ["http://localhost:5173"]
+    cors_allowed_origins: list[str] = ["http://localhost:5176"]
     auth_session_ttl_days: int = Field(default=7, gt=0)
     auth_cookie_name: str = "shop_session"
     auth_cookie_secure: bool = False

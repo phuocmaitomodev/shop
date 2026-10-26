@@ -10,7 +10,7 @@ npm install
 npm run dev
 ```
 
-Mặc định frontend chạy tại `http://localhost:5173` và gọi API theo `VITE_API_BASE_URL`.
+Mặc định frontend chạy tại `http://localhost:5176` và gọi API theo `VITE_API_BASE_URL`.
 
 ## Kiểm tra
 

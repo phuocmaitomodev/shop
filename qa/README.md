@@ -28,7 +28,7 @@ Cấu hình mặc định dùng Google Chrome cài trên máy (`channel: chrome`
 
 ```bash
 cd qa
-QA_BASE_URL=http://127.0.0.1:5173 npm run test:smoke
+QA_BASE_URL=http://127.0.0.1:5176 npm run test:smoke
 ```
 
 ## Biến môi trường dành cho integration sau này

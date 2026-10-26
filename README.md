@@ -22,7 +22,7 @@ Không đưa Gemini API key thật vào source control.
 
 Các địa chỉ local mặc định:
 
-- Frontend: http://localhost:5173
+- Frontend: http://localhost:5176
 - API docs: http://localhost:8000/docs
 - API liveness: http://localhost:8000/api/v1/health/live
 - API readiness: http://localhost:8000/api/v1/health/ready
