@@ -6,6 +6,7 @@ from sqlalchemy import (
     Boolean,
     CheckConstraint,
     DateTime,
+    ForeignKey,
     Index,
     Integer,
     String,
@@ -16,6 +17,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.types import UserDefinedType
 
 from app.db.base import Base
 from app.models.catalog import TimestampMixin
@@ -34,6 +36,26 @@ INDEX_STATUSES = ("pending", "indexed", "failed")
 JOB_STATUSES = ("pending", "processing", "succeeded", "failed")
 INDEX_EVENT_TYPES = ("upsert", "delete")
 CURRENT_INDEX_EVENT_PAYLOAD_VERSION = 1
+
+
+class VectorType(UserDefinedType):
+    """Minimal pgvector type with a JSON-compatible SQLite test variant."""
+
+    cache_ok = True
+
+    def __init__(self, dimensions: int) -> None:
+        self.dimensions = dimensions
+
+    def get_col_spec(self, **_kwargs) -> str:
+        return f"VECTOR({self.dimensions})"
+
+    def bind_processor(self, _dialect):
+        def process(value):
+            if value is None or isinstance(value, str):
+                return value
+            return "[" + ",".join(str(float(item)) for item in value) + "]"
+
+        return process
 
 
 class KnowledgeDocument(TimestampMixin, Base):
@@ -85,6 +107,40 @@ class RagDocument(TimestampMixin, Base):
     source_version: Mapped[int] = mapped_column(Integer)
     checksum: Mapped[str] = mapped_column(String(64))
     index_status: Mapped[str] = mapped_column(String(20), default="pending")
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+
+
+class RagChunk(TimestampMixin, Base):
+    __tablename__ = "rag_chunks"
+    __table_args__ = (
+        CheckConstraint("chunk_index >= 0", name="chunk_index_non_negative"),
+        CheckConstraint("source_version > 0", name="source_version_positive"),
+        UniqueConstraint(
+            "rag_document_id",
+            "source_version",
+            "chunk_index",
+            name="uq_rag_chunk_document_version_index",
+        ),
+        Index("ix_rag_chunks_document_active", "rag_document_id", "is_active"),
+    )
+
+    id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
+    rag_document_id: Mapped[UUID] = mapped_column(
+        ForeignKey("rag_documents.id", ondelete="CASCADE")
+    )
+    chunk_index: Mapped[int] = mapped_column(Integer)
+    content: Mapped[str] = mapped_column(Text)
+    chunk_metadata: Mapped[dict] = mapped_column(
+        "metadata",
+        JSON().with_variant(JSONB, "postgresql"),
+        default=dict,
+        server_default=text("'{}'"),
+    )
+    embedding: Mapped[list[float]] = mapped_column(
+        JSON().with_variant(VectorType(768), "postgresql")
+    )
+    embedding_model: Mapped[str] = mapped_column(String(120))
+    source_version: Mapped[int] = mapped_column(Integer)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
 
 

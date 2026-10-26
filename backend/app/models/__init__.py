@@ -9,7 +9,7 @@ from app.models.catalog import (
     ProductVariant,
     Size,
 )
-from app.models.knowledge import KnowledgeDocument, RagDocument, RagIndexJob
+from app.models.knowledge import KnowledgeDocument, RagChunk, RagDocument, RagIndexJob
 
 __all__ = [
     "AuthSession",
@@ -22,6 +22,7 @@ __all__ = [
     "ProductImage",
     "ProductLabel",
     "ProductVariant",
+    "RagChunk",
     "RagDocument",
     "RagIndexJob",
     "Size",

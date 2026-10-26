@@ -54,11 +54,13 @@ def test_catalog_business_tables_have_timestamps() -> None:
 def test_rag_content_metadata_defines_required_tables() -> None:
     assert {
         "knowledge_documents",
+        "rag_chunks",
         "rag_documents",
         "rag_index_jobs",
     } <= set(metadata.tables)
     for table_name in {
         "knowledge_documents",
+        "rag_chunks",
         "rag_documents",
         "rag_index_jobs",
     }:
@@ -76,10 +78,10 @@ def test_alembic_has_single_loadable_rag_content_head_that_enables_pgvector(
     scripts = ScriptDirectory.from_config(config)
 
     heads = scripts.get_heads()
-    assert heads == ["0004_rag_content"]
+    assert heads == ["0005_rag_chunks"]
 
-    rag_content_revision = scripts.get_revision(heads[0])
-    assert rag_content_revision.down_revision == "0003_catalog"
+    rag_chunks_revision = scripts.get_revision(heads[0])
+    assert rag_chunks_revision.down_revision == "0004_rag_content"
 
     revision = scripts.get_revision("0001_enable_pgvector")
     executed_sql = []
