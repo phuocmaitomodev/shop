@@ -1,5 +1,7 @@
 # Kiến trúc tổng thể
 
+> **Phạm vi MVP hiện hành:** Theo quyết định thu gọn ngày 2026-10-26, implementation/release gate chỉ gồm catalog công khai, product detail tối giản và chat RAG sản phẩm. Xem [`mvp-product-rag-scope.md`](mvp-product-rag-scope.md). Các phần auth, commerce, admin và support dưới đây được giữ làm kiến trúc mục tiêu lịch sử, không thuộc MVP hiện tại.
+
 ## 1. Mục tiêu và phạm vi
 
 Hệ thống là website demo bán quần áo tiếng Việt gồm storefront, trang quản trị và chatbot RAG. Hệ thống chạy local bằng Docker Compose, dùng Vue 3 + Vite, FastAPI, PostgreSQL + pgvector và Gemini API. Kiến trúc ưu tiên rõ ràng, dễ dựng lại và đủ để nghiệm thu; không thiết kế các năng lực production nằm ngoài `request.md`.

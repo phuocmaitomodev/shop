@@ -1,5 +1,7 @@
 # Acceptance test plan
 
+> **Acceptance gate MVP hiện hành:** Chỉ các gate `MVP-*` trong [`mvp-product-rag-scope.md`](mvp-product-rag-scope.md) quyết định release bản thu gọn. Các test CAT/ADM/RAG/SEC cũ dưới đây được giữ để truy vết yêu cầu gốc và chỉ áp dụng khi nằm trong mapping MVP; hạng mục auth, cart, checkout, order, admin và support không còn là blocker.
+
 ## 1. Mục đích
 
 Tài liệu chuyển tiêu chí nghiệm thu trong `request.md` thành các kiểm tra có mã, điều kiện và kết quả mong đợi. Đây là baseline cho `shop-qa`; không thay thế yêu cầu gốc và không được tự hạ tiêu chuẩn.
