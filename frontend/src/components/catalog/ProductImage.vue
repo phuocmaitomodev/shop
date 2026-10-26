@@ -14,14 +14,24 @@ watch(() => props.src, () => {
   failed.value = false
 })
 
-const hasImage = computed(() => Boolean(props.src?.trim()) && !failed.value)
+const imageSource = computed(() => {
+  const source = props.src?.trim()
+  if (!source || !source.startsWith('/')) return source
+
+  try {
+    return new URL(source, import.meta.env.VITE_API_BASE_URL).toString()
+  } catch {
+    return source
+  }
+})
+const hasImage = computed(() => Boolean(imageSource.value) && !failed.value)
 </script>
 
 <template>
   <div class="product-image">
     <img
       v-if="hasImage"
-      :src="src ?? undefined"
+      :src="imageSource"
       :alt="alt"
       :loading="eager ? 'eager' : 'lazy'"
       @error="failed = true"

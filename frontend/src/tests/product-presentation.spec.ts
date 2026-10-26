@@ -81,16 +81,24 @@ describe('ProductCard', () => {
 })
 
 describe('ProductImage', () => {
-  it('renders the product image with accessible alternative text', () => {
+  it('resolves API-rooted product images and keeps accessible alternative text', () => {
     const wrapper = mount(ProductImage, {
       props: { src: '/media/ao-thun.jpg', alt: 'Áo thun basic' },
     })
 
     expect(wrapper.get('img').attributes()).toMatchObject({
-      src: '/media/ao-thun.jpg',
+      src: `${new URL(import.meta.env.VITE_API_BASE_URL).origin}/media/ao-thun.jpg`,
       alt: 'Áo thun basic',
       loading: 'lazy',
     })
+  })
+
+  it('keeps an absolute public image URL unchanged', () => {
+    const wrapper = mount(ProductImage, {
+      props: { src: 'https://cdn.example.com/ao-thun.jpg', alt: 'Áo thun basic' },
+    })
+
+    expect(wrapper.get('img').attributes('src')).toBe('https://cdn.example.com/ao-thun.jpg')
   })
 
   it('renders a labelled placeholder when the image is missing or fails', async () => {

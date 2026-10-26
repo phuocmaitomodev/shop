@@ -99,7 +99,7 @@ describe('ProductDetailPage', () => {
     expect(wrapper.text()).toContain('Áo thun')
     expect(wrapper.get('[data-testid="effective-price"]').text()).toBe('249.000 ₫')
     expect(wrapper.get('img').attributes()).toMatchObject({
-      src: '/media/products/ao-thun-basic.jpg',
+      src: `${new URL(import.meta.env.VITE_API_BASE_URL).origin}/media/products/ao-thun-basic.jpg`,
       alt: 'Áo thun basic màu đen',
     })
   })
