@@ -44,4 +44,52 @@ describe('api client', () => {
     expect(headers.get('Content-Type')).toBe('application/json')
     expect(headers.get('X-Request-Source')).toBe('storefront')
   })
+
+  it('keeps the stable API error code and status from an error envelope', async () => {
+    fetchMock.mockResolvedValue(new Response(JSON.stringify({
+      error: {
+        code: 'PRODUCT_NOT_FOUND',
+        message: 'Không tìm thấy sản phẩm.',
+        fields: {},
+        details: {},
+      },
+      meta: { request_id: 'request-1' },
+    }), { status: 404, headers: { 'Content-Type': 'application/json' } }))
+    const { apiClient, ApiClientError } = await import('../services/api-client')
+
+    const request = apiClient('/products/khong-ton-tai')
+    await expect(request).rejects.toBeInstanceOf(ApiClientError)
+    await expect(request).rejects.toMatchObject({
+      status: 404,
+      message: 'Không tìm thấy sản phẩm.',
+      payload: { error: { code: 'PRODUCT_NOT_FOUND' } },
+    })
+  })
+
+  it('normalizes network failures to the shared API client error', async () => {
+    fetchMock.mockRejectedValue(new TypeError('Failed to fetch'))
+    const { apiClient, ApiClientError } = await import('../services/api-client')
+
+    await expect(apiClient('/products')).rejects.toMatchObject({
+      name: ApiClientError.name,
+      status: 0,
+      payload: null,
+      message: 'Không thể kết nối đến máy chủ.',
+    })
+  })
+
+  it('does not trust an HTTP error body outside the project error envelope', async () => {
+    fetchMock.mockResolvedValue(new Response(JSON.stringify({ detail: 'Internal Server Error' }), {
+      status: 500,
+      headers: { 'Content-Type': 'application/json' },
+    }))
+    const { apiClient, ApiClientError } = await import('../services/api-client')
+
+    await expect(apiClient('/products')).rejects.toMatchObject({
+      name: ApiClientError.name,
+      status: 500,
+      payload: null,
+      message: 'Không thể kết nối đến máy chủ.',
+    })
+  })
 })
