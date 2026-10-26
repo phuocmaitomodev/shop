@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Protocol
 
 from app.core.config import get_settings
+from app.core.logging import configure_logging
 from app.db.session import SessionLocal
 from app.rag.provider import DeterministicEmbeddingProvider
 from app.rag.worker import RagIndexWorker, WorkerOptions
@@ -46,6 +47,7 @@ async def run_worker_loop(
 
 async def run(stop_event: asyncio.Event | None = None) -> None:
     settings = get_settings()
+    configure_logging(settings.log_level)
     stop_event = stop_event or asyncio.Event()
     provider = DeterministicEmbeddingProvider(settings.embedding_dimension)
     worker = RagIndexWorker(
