@@ -9,12 +9,17 @@ Yêu cầu Docker Engine và Docker Compose v2.
 
 ```bash
 cp .env.example .env
+docker compose up -d db
+docker compose run --rm api alembic upgrade head
+docker compose run --rm api python -m app.cli.seed_catalog
+docker compose run --rm api python -m app.cli.verify_catalog
+docker compose run --rm api python -m app.cli.reindex_products
 docker compose up --build -d
 docker compose ps
-docker compose exec api alembic upgrade head
-docker compose exec api python -m app.cli.seed_catalog
-docker compose exec api python -m app.cli.reindex_products
 ```
+
+Phải migrate trước khi khởi động toàn stack; nếu chạy worker trên database chưa có
+schema, worker sẽ retry và ghi lỗi cho đến khi migration hoàn tất.
 
 Trước khi chia sẻ môi trường, thay các giá trị `change-me-*` trong `.env` và giữ
 `POSTGRES_PASSWORD` đồng bộ với mật khẩu đã URL-encode trong `DATABASE_URL`.
@@ -30,8 +35,9 @@ Các địa chỉ local mặc định:
 `rag-worker` claim outbox bằng `FOR UPDATE SKIP LOCKED`, dùng lease để phục hồi
 job bị gián đoạn và chạy provider deterministic offline theo mặc định. Xem cấu
 hình retry và hướng dẫn vận hành trong [`backend/README.md`](backend/README.md).
-Đặt `RAG_EMBEDDING_PROVIDER=gemini` cùng `GEMINI_API_KEY` và
-`GEMINI_EMBEDDING_MODEL` trong `.env` để dùng Gemini; không cần key khi dùng stub.
+Đặt `RAG_EMBEDDING_PROVIDER=gemini`, `RAG_CHAT_PROVIDER=gemini` cùng
+`GEMINI_API_KEY`, `GEMINI_MODEL` và `GEMINI_EMBEDDING_MODEL` trong `.env` để
+dùng Gemini; không cần key khi dùng stub deterministic mặc định.
 
 ## Kiểm tra và dọn môi trường
 
@@ -42,9 +48,9 @@ docker compose logs rag-worker
 docker compose down
 ```
 
-## Chạy các kiểm tra như CI
+## Chạy release gate
 
-Các lệnh local dưới đây khớp với workflow `.github/workflows/ci.yml`:
+Các lệnh local release gate:
 
 ```bash
 # Backend (integration PostgreSQL được tách riêng và sẽ skip ở suite này)
@@ -53,8 +59,15 @@ docker run --rm shop-backend-test
 
 # Frontend
 npm --prefix frontend ci
-npm --prefix frontend test
-npm --prefix frontend run build
+VITE_API_BASE_URL=http://localhost:8000/api/v1 npm --prefix frontend test
+VITE_API_BASE_URL=http://localhost:8000/api/v1 npm --prefix frontend run build
+
+# E2E trên stack Compose đã migrate, seed và reindex
+npm --prefix qa ci
+node qa/node_modules/typescript/lib/tsc.js -p qa/tsconfig.json --noEmit
+QA_BASE_URL=http://127.0.0.1:5176 \
+QA_API_BASE_URL=http://127.0.0.1:8000/api/v1 \
+npm --prefix qa run test:mvp
 
 # Alembic upgrade trên PostgreSQL/pgvector hoàn toàn mới
 docker compose --env-file .env.example \

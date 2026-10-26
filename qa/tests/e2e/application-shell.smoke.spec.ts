@@ -1,9 +1,7 @@
 import { expect, test } from '@playwright/test'
 
 const placeholderRoutes = [
-  ['/san-pham', 'Sản phẩm'],
   ['/danh-muc/ao-thun', 'Danh mục sản phẩm'],
-  ['/san-pham/ao-thun-basic', 'Chi tiết sản phẩm'],
   ['/gio-hang', 'Giỏ hàng'],
   ['/thanh-toan', 'Thanh toán'],
   ['/dat-hang-thanh-cong', 'Đặt hàng thành công'],

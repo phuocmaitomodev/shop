@@ -14,10 +14,14 @@ When changing the PostgreSQL password, update the URL-encoded password in `DATAB
 ## Run API and PostgreSQL
 
 ```bash
-docker compose up --build -d
+docker compose up -d db
+docker compose run --rm api alembic upgrade head
+docker compose up --build -d api rag-worker frontend
 docker compose ps
-docker compose exec api alembic upgrade head
 ```
+
+Không khởi động `rag-worker` trước migration: worker cần các bảng outbox/chunk và
+sẽ retry với log lỗi khi schema chưa tồn tại.
 
 Endpoints:
 
