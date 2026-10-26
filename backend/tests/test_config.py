@@ -8,7 +8,7 @@ def test_settings_are_loaded_from_environment(monkeypatch) -> None:
     monkeypatch.setenv("APP_ENV", "test")
     monkeypatch.setenv("APP_SECRET_KEY", "test-only-secret")
     monkeypatch.setenv("DATABASE_URL", "postgresql+asyncpg://shop:shop@db:5432/shop")
-    monkeypatch.setenv("CORS_ALLOWED_ORIGINS", '["http://localhost:5173"]')
+    monkeypatch.setenv("CORS_ALLOWED_ORIGINS", '["http://localhost:5176"]')
     monkeypatch.setenv("AUTH_SESSION_TTL_DAYS", "14")
     monkeypatch.setenv("PASSWORD_RESET_TTL_MINUTES", "20")
 
@@ -17,7 +17,7 @@ def test_settings_are_loaded_from_environment(monkeypatch) -> None:
     assert settings.app_env == "test"
     assert settings.app_secret_key.get_secret_value() == "test-only-secret"
     assert str(settings.database_url) == "postgresql+asyncpg://shop:shop@db:5432/shop"
-    assert settings.cors_allowed_origins == ["http://localhost:5173"]
+    assert settings.cors_allowed_origins == ["http://localhost:5176"]
     assert settings.auth_session_ttl_days == 14
     assert settings.password_reset_ttl_minutes == 20
 
