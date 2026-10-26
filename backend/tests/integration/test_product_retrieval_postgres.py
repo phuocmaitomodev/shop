@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from uuid import UUID, uuid4
 
 import pytest
+from fastapi.testclient import TestClient
 from sqlalchemy import text, update
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
@@ -17,6 +18,9 @@ from app.models.catalog import (
     Size,
 )
 from app.models.knowledge import RagChunk, RagDocument
+from app.api.v1 import chat as chat_api
+from app.db.session import get_db_session
+from app.main import create_app
 from app.rag.retrieval import ProductRetrievalFilters, retrieve_products
 from tests.integration.database_guard import require_fresh_migrated_database
 
@@ -266,6 +270,44 @@ def test_entity_limit_is_not_consumed_by_multiple_chunks_from_one_product(
     ]
     assert all(product.product_id == product.source_id for product in first)
     assert all(len(product.chunk_ids) == 1 for product in first)
+
+
+def test_chat_api_integrates_orchestration_with_postgres_hydration(
+    retrieval_fixture: RetrievalFixture, monkeypatch
+) -> None:
+    class FixedEmbeddingProvider:
+        async def embed(self, texts):
+            assert texts == ["sản phẩm màu đen size M dưới 1000"]
+            return [_QUERY_VECTOR]
+
+    async def override_session():
+        async with retrieval_fixture.session_factory() as session:
+            yield session
+
+    monkeypatch.setattr(
+        chat_api, "_embedding_provider", lambda _settings: FixedEmbeddingProvider()
+    )
+    application = create_app()
+    application.dependency_overrides[get_db_session] = override_session
+    with TestClient(application) as client:
+        response = client.post(
+            "/api/v1/chat",
+            json={"message": "Tìm sản phẩm màu đen size M dưới 1000"},
+        )
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["status"] == "ok"
+    returned_ids = {UUID(product["id"]) for product in data["products"]}
+    assert returned_ids <= {
+        retrieval_fixture.product_ids["target"],
+        retrieval_fixture.product_ids["below-min"],
+        retrieval_fixture.product_ids["wrong-category"],
+    }
+    assert returned_ids == {
+        UUID(source["product_id"]) for source in data["sources"]
+    }
+    assert all(product["url"].startswith("/san-pham/") for product in data["products"])
 
 
 def test_price_and_stock_are_hydrated_live_without_reindex(

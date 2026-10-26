@@ -117,6 +117,20 @@ API trả chi tiết item/giá mới để frontend yêu cầu user xác nhận 
 
 ## 5. Chat và support
 
+### Contract MVP hiện hành
+
+`POST /chat` là endpoint chat công khai, không lưu transcript. Request gồm
+`message` (1–1000 ký tự, không chỉ có khoảng trắng) và tối đa 6 phần tử `history`;
+mỗi phần tử có `role` (`user` hoặc `assistant`) và `content` 1–1000 ký tự.
+
+Response dùng success envelope và trả `answer`, `products`, `sources`, `status`.
+`status` thuộc `ok`, `insufficient_data`, `out_of_scope`, `provider_unavailable`.
+Product card và source ID chỉ được tạo từ retrieval set đã hydrate lại bằng SQL;
+link sản phẩm có dạng `/san-pham/{slug}`. Endpoint không tạo session, ticket hoặc
+lưu lịch sử. Các endpoint session/support bên dưới là contract lịch sử ngoài MVP.
+Endpoint áp dụng rate limit theo IP và trả error envelope `RATE_LIMITED` với HTTP
+429 khi vượt ngưỡng cấu hình.
+
 | Method | Path | Mục đích |
 |---|---|---|
 | POST | `/chat/sessions` | Tạo anonymous/authenticated session |

@@ -8,7 +8,7 @@ From the repository root, create the untracked runtime environment file:
 cp .env.example .env
 ```
 
-Replace the placeholder application and database secrets before sharing the environment. Keep `RAG_EMBEDDING_PROVIDER=stub` for deterministic offline development, or configure the Gemini values described below.
+Replace the placeholder application and database secrets before sharing the environment. Keep `RAG_EMBEDDING_PROVIDER=stub` and `RAG_CHAT_PROVIDER=stub` for deterministic offline development, or configure the Gemini values described below.
 When changing the PostgreSQL password, update the URL-encoded password in `DATABASE_URL` to match it.
 
 ## Run API and PostgreSQL
@@ -140,6 +140,17 @@ To remove the local database volume and start clean:
 ```bash
 docker compose down --volumes
 ```
+
+## Product chat API
+
+`POST /api/v1/chat` nhận `message` và tối đa 6 lượt `history`, không lưu transcript.
+Response trả `answer`, product cards SQL-hydrated, source IDs đã allow-list và một
+trong các status `ok`, `insufficient_data`, `out_of_scope`,
+`provider_unavailable`. Stub deterministic là mặc định. Để dùng Gemini cho
+structured planning/selection, đặt `RAG_CHAT_PROVIDER=gemini`, `GEMINI_API_KEY`
+và `GEMINI_MODEL`; dynamic price/stock vẫn luôn được render từ PostgreSQL.
+API giới hạn theo IP với `CHAT_RATE_LIMIT_REQUESTS` trong cửa sổ
+`CHAT_RATE_LIMIT_WINDOW_SECONDS` để bảo vệ provider công khai.
 
 ## RAG index worker
 

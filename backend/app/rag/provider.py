@@ -1,7 +1,7 @@
 import hashlib
 import math
 from collections.abc import Sequence
-from typing import Protocol
+from typing import Literal, Protocol
 from urllib.parse import quote
 
 import httpx
@@ -56,6 +56,7 @@ class GeminiEmbeddingProvider:
         api_key: str,
         model_name: str,
         dimension: int,
+        task_type: Literal["RETRIEVAL_DOCUMENT", "RETRIEVAL_QUERY"] = "RETRIEVAL_DOCUMENT",
         client: httpx.AsyncClient | None = None,
     ) -> None:
         if not api_key:
@@ -65,6 +66,7 @@ class GeminiEmbeddingProvider:
             raise ValueError("GEMINI_EMBEDDING_MODEL is required")
         self.model_name = normalized_model
         self.dimension = dimension
+        self.task_type = task_type
         self._api_key = api_key
         self._client = client
 
@@ -77,7 +79,7 @@ class GeminiEmbeddingProvider:
                 {
                     "model": model_path,
                     "content": {"parts": [{"text": text}]},
-                    "taskType": "RETRIEVAL_DOCUMENT",
+                    "taskType": self.task_type,
                     "outputDimensionality": self.dimension,
                 }
                 for text in texts

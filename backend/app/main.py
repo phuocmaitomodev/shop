@@ -8,7 +8,7 @@ from app.api.v1.router import api_router
 from app.core.config import get_settings
 from app.core.errors import register_exception_handlers
 from app.core.logging import configure_logging
-from app.core.middleware import RequestContextMiddleware
+from app.core.middleware import ChatBodyLimitMiddleware, RequestContextMiddleware
 from app.core.rate_limit import InMemoryRateLimiter
 
 
@@ -18,6 +18,8 @@ def create_app() -> FastAPI:
 
     application = FastAPI(title=settings.app_name)
     application.state.auth_rate_limiter = InMemoryRateLimiter()
+    application.state.chat_rate_limiter = InMemoryRateLimiter()
+    application.add_middleware(ChatBodyLimitMiddleware)
     application.add_middleware(RequestContextMiddleware)
     application.add_middleware(
         CORSMiddleware,
