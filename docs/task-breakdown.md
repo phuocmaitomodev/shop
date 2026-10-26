@@ -1,5 +1,7 @@
 # Task breakdown và dependency
 
+> **Kế hoạch thực thi hiện hành:** Kanban phải theo critical path `MVP-01..07` trong [`mvp-product-rag-scope.md`](mvp-product-rag-scope.md). Các task BE/FE/RAG/QA đầy đủ bên dưới là backlog lịch sử; task ngoài catalog công khai, product detail tối giản và chat RAG sản phẩm phải archive khỏi board MVP.
+
 ## 1. Mục tiêu điều phối
 
 Chia việc cho bốn profile để triển khai theo contract, giảm xung đột và không bắt frontend/RAG đoán API. Tài liệu này là kế hoạch thực hiện; ở bước khởi tạo hiện tại **chưa triển khai source code sản phẩm**.

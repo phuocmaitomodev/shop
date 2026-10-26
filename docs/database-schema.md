@@ -1,5 +1,7 @@
 # Database schema dự kiến
 
+> **Schema MVP hiện hành:** Chỉ schema catalog, variant/stock và các bảng/chunk cần cho product RAG thuộc release gate trong [`mvp-product-rag-scope.md`](mvp-product-rag-scope.md). Identity, cart, order, coupon, support và các schema mục tiêu khác được giữ để tham khảo, không phải blocker của bản thu gọn.
+
 ## 1. Quy ước
 
 - PostgreSQL + extension `vector`; UUID làm primary key, `timestamptz` lưu UTC.

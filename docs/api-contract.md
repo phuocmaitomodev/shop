@@ -1,5 +1,7 @@
 # API contract frontend ↔ backend
 
+> **Contract MVP hiện hành:** Surface bắt buộc được thu gọn còn `GET /api/v1/products`, `GET /api/v1/products/{slug}` và `POST /api/v1/chat` như định nghĩa trong [`mvp-product-rag-scope.md`](mvp-product-rag-scope.md). Các nhóm API auth/cart/order/admin/support dưới đây được giữ làm contract mục tiêu lịch sử và không thuộc release gate MVP.
+
 ## 1. Quy ước chung
 
 - Base path: `/api/v1`.
