@@ -4,10 +4,14 @@ import signal
 from pathlib import Path
 from typing import Protocol
 
-from app.core.config import get_settings
+from app.core.config import Settings, get_settings
 from app.core.logging import configure_logging
 from app.db.session import SessionLocal
-from app.rag.provider import DeterministicEmbeddingProvider
+from app.rag.provider import (
+    DeterministicEmbeddingProvider,
+    EmbeddingProvider,
+    GeminiEmbeddingProvider,
+)
 from app.rag.worker import RagIndexWorker, WorkerOptions
 
 logger = logging.getLogger(__name__)
@@ -16,6 +20,18 @@ READY_FILE = Path("/tmp/rag-worker-ready")
 
 class JobWorker(Protocol):
     async def run_once(self) -> bool: ...
+
+
+def _build_embedding_provider(settings: Settings) -> EmbeddingProvider:
+    if settings.rag_embedding_provider == "stub":
+        return DeterministicEmbeddingProvider(settings.embedding_dimension)
+    if settings.gemini_api_key is None or settings.gemini_embedding_model is None:
+        raise RuntimeError("Gemini embedding configuration is incomplete")
+    return GeminiEmbeddingProvider(
+        api_key=settings.gemini_api_key.get_secret_value(),
+        model_name=settings.gemini_embedding_model,
+        dimension=settings.embedding_dimension,
+    )
 
 
 async def run_worker_loop(
@@ -49,7 +65,7 @@ async def run(stop_event: asyncio.Event | None = None) -> None:
     settings = get_settings()
     configure_logging(settings.log_level)
     stop_event = stop_event or asyncio.Event()
-    provider = DeterministicEmbeddingProvider(settings.embedding_dimension)
+    provider = _build_embedding_provider(settings)
     worker = RagIndexWorker(
         SessionLocal,
         provider,

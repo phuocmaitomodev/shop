@@ -8,7 +8,7 @@ From the repository root, create the untracked runtime environment file:
 cp .env.example .env
 ```
 
-Replace the placeholder application and database secrets before sharing the environment. Gemini values are reserved for later RAG tasks and are not used by the foundation or authentication tasks.
+Replace the placeholder application and database secrets before sharing the environment. Keep `RAG_EMBEDDING_PROVIDER=stub` for deterministic offline development, or configure the Gemini values described below.
 When changing the PostgreSQL password, update the URL-encoded password in `DATABASE_URL` to match it.
 
 ## Run API and PostgreSQL
@@ -92,6 +92,21 @@ Both commands exit `0` on success and `1` on a validation, collision or database
 error. Seed images use the internal `/media/placeholders/catalog-product.svg` asset
 served by the API container.
 
+### Product projection and reindex
+
+After seeding, synchronize public catalog products into the durable RAG projection
+and enqueue changed versions with:
+
+```bash
+docker compose --env-file .env.example run --rm api python -m app.cli.reindex_products
+```
+
+The command is idempotent: unchanged products do not create another job. Name,
+category and description are projected for semantic retrieval. Price, sale price,
+color, size and stock are deliberately excluded and must be hydrated from PostgreSQL
+when answering a chat request. Inactive, soft-deleted, category-inactive and orphaned
+products enqueue a versioned delete event.
+
 ## Tests and verification
 
 ```bash
@@ -136,6 +151,10 @@ transaction. Job `processing` có lease quá hạn được đưa lại về `pe
 
 Các biến vận hành:
 
+- `RAG_EMBEDDING_PROVIDER=stub|gemini` chọn provider. Với `gemini`, phải cấu hình
+  cả `GEMINI_API_KEY` và `GEMINI_EMBEDDING_MODEL`; worker fail-fast nếu thiếu.
+- Gemini key chỉ được gửi trong header `x-goog-api-key`, không được ghi log hoặc
+  commit. Adapter yêu cầu output 768 chiều và chuẩn hóa L2 trước khi lưu.
 - `EMBEDDING_DIMENSION=768` phải khớp migration `vector(768)`; startup fail-fast
   với giá trị khác.
 - `RAG_WORKER_LOCK_TIMEOUT_SECONDS` phải lớn hơn thời gian xử lý/provider tệ nhất.

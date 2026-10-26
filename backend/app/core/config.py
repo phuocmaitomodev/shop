@@ -20,7 +20,9 @@ class Settings(BaseSettings):
     auth_rate_limit_window_seconds: int = Field(default=60, gt=0)
     auth_rate_limit_max_keys: int = Field(default=10_000, gt=0)
     forgot_response_floor_ms: int = Field(default=250, ge=0)
-    rag_embedding_provider: Literal["stub"] = "stub"
+    rag_embedding_provider: Literal["stub", "gemini"] = "stub"
+    gemini_api_key: SecretStr | None = None
+    gemini_embedding_model: str | None = None
     embedding_dimension: int = Field(default=768, gt=0)
     rag_worker_lock_timeout_seconds: int = Field(default=300, gt=0)
     rag_worker_provider_timeout_seconds: float = Field(default=120.0, gt=0)
@@ -43,6 +45,16 @@ class Settings(BaseSettings):
             raise ValueError("AUTH_COOKIE_SECURE must be true in production")
         if self.embedding_dimension != 768:
             raise ValueError("EMBEDDING_DIMENSION must be 768 for the current migration")
+        if self.rag_embedding_provider == "gemini" and (
+            self.gemini_api_key is None
+            or not self.gemini_api_key.get_secret_value()
+            or not self.gemini_embedding_model
+            or not self.gemini_embedding_model.strip()
+        ):
+            raise ValueError(
+                "GEMINI_API_KEY and GEMINI_EMBEDDING_MODEL are required "
+                "when RAG_EMBEDDING_PROVIDER=gemini"
+            )
         if self.rag_worker_retry_max_seconds < self.rag_worker_retry_base_seconds:
             raise ValueError(
                 "RAG_WORKER_RETRY_MAX_SECONDS must be greater than or equal to "
