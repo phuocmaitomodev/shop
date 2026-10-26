@@ -12,6 +12,7 @@ from app.models.knowledge import RagChunk, RagDocument, RagIndexJob
 from app.rag.product_projection import sync_product_projections
 from app.rag.provider import DeterministicEmbeddingProvider
 from app.rag.worker import RagIndexWorker, WorkerOptions
+from tests.integration.database_guard import require_fresh_migrated_database
 
 
 DATABASE_URL = os.getenv("MIGRATION_DATABASE_URL")
@@ -23,6 +24,7 @@ pytestmark = pytest.mark.skipif(
 
 def test_postgres_product_projection_reindex_is_idempotent_and_indexable() -> None:
     assert DATABASE_URL is not None
+    require_fresh_migrated_database(DATABASE_URL)
 
     async def exercise() -> None:
         engine = create_async_engine(DATABASE_URL, poolclass=NullPool)

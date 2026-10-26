@@ -75,6 +75,7 @@ services:
         "tests/integration/test_postgres_migrations.py",
         "tests/integration/test_product_projection_postgres.py",
         "tests/test_rag_index_postgres.py",
+        "tests/integration/test_product_retrieval_postgres.py",
         "-v",
       ]
 

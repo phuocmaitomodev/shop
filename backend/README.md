@@ -197,3 +197,17 @@ ORDER BY created_at, id;
 iteration kế tiếp. Job `failed` là terminal; sau khi sửa nguyên nhân, thao tác
 reindex phải tạo source version/job mới thay vì sửa hoặc hồi sinh job cũ. Worker
 xử lý `SIGTERM`/`SIGINT`, dừng sau iteration hiện tại và xóa readiness marker.
+
+## Product retrieval and live hydration
+
+`app.rag.retrieval.retrieve_products` nhận vector truy vấn 768 chiều, hard filters
+`category`, `min_price`, `max_price`, `color`, `size` và limit tối đa 20. Candidate
+chỉ đến từ product document đang active/indexed cùng active chunk đúng
+`source_version`; ranking và limit được áp dụng theo product để nhiều chunk của một
+product không lấn át product khác. Category, effective price và một biến thể còn
+hàng thỏa đồng thời color/size đều được lọc bằng SQL.
+
+Sau semantic selection, hàm revalidate document/chunk và hydrate name, slug, ảnh,
+effective price, màu, size và stock từ catalog PostgreSQL trong một câu SQL cuối.
+Kết quả chỉ expose product/source/chunk IDs thuộc retrieval set đã xác thực; dữ liệu
+động trong embedding hoặc chunk content không được dùng làm nguồn trả lời.

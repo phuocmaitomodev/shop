@@ -14,6 +14,10 @@ from sqlalchemy.pool import NullPool
 from app.db.session import get_db_session
 from app.main import create_app
 from app.models.catalog import Category, Color, Product, ProductVariant, Size
+from tests.integration.database_guard import (
+    mark_fresh_migrated_database,
+    require_fresh_migrated_database,
+)
 
 
 DATABASE_URL = os.getenv("CATALOG_TEST_DATABASE_URL")
@@ -33,10 +37,23 @@ def postgres_catalog_client():
         try:
             async with validation_engine.connect() as connection:
                 database_name = await connection.scalar(text("SELECT current_database()"))
+                public_tables = set(
+                    await connection.scalars(
+                        text(
+                            "SELECT tablename FROM pg_catalog.pg_tables "
+                            "WHERE schemaname = 'public'"
+                        )
+                    )
+                )
             if database_name is None or not database_name.endswith("_test"):
                 raise RuntimeError(
                     "CATALOG_TEST_DATABASE_URL must target a dedicated database whose "
                     "name ends with '_test'"
+                )
+            if public_tables:
+                raise RuntimeError(
+                    "CATALOG_TEST_DATABASE_URL must target a fresh database without "
+                    "public tables"
                 )
         finally:
             await validation_engine.dispose()
@@ -55,6 +72,8 @@ def postgres_catalog_client():
         text=True,
     )
     assert migration.returncode == 0, migration.stdout + migration.stderr
+    mark_fresh_migrated_database(DATABASE_URL)
+    require_fresh_migrated_database(DATABASE_URL)
 
     engine = create_async_engine(DATABASE_URL, poolclass=NullPool)
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
