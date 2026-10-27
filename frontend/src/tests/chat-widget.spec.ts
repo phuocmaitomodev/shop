@@ -27,7 +27,7 @@ describe('ChatWidget', () => {
 
     await toggle.trigger('click')
     expect(toggle.attributes('aria-expanded')).toBe('true')
-    expect(wrapper.get('[role="dialog"]').attributes('aria-label')).toBe('Trợ lý sản phẩm')
+    expect(wrapper.get('[role="dialog"]').attributes('aria-label')).toBe('Trợ lý mua sắm')
 
     document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))
     await wrapper.vm.$nextTick()
@@ -35,6 +35,39 @@ describe('ChatWidget', () => {
     expect(document.activeElement).toBe(toggle.element)
 
     wrapper.unmount()
+  })
+
+  it('suggests a return-policy question and renders its citation as plain text', async () => {
+    sendChatMessageMock.mockResolvedValue({
+      answer: 'Bạn có thể đổi hàng trong 07 ngày nếu sản phẩm chưa qua sử dụng.',
+      products: [],
+      sources: [{
+        source_type: 'knowledge',
+        source_id: '00000000-0000-0000-0000-000000000001',
+        rag_document_id: '00000000-0000-0000-0000-000000000002',
+        chunk_ids: ['00000000-0000-0000-0000-000000000003'],
+        product_id: null,
+        knowledge_type: 'return_policy',
+        title: 'Chính sách đổi trả',
+      }],
+      status: 'ok',
+    })
+    const wrapper = mount(ChatWidget)
+
+    await wrapper.get('[data-testid="chat-toggle"]').trigger('click')
+    expect(wrapper.get('[role="dialog"]').attributes('aria-label')).toBe('Trợ lý mua sắm')
+    expect(wrapper.get('[data-testid="chat-suggestion-return-policy"]').text())
+      .toContain('đổi trả')
+
+    await wrapper.get('[data-testid="chat-suggestion-return-policy"]').trigger('click')
+    await vi.waitFor(() => expect(sendChatMessageMock).toHaveBeenCalledTimes(1))
+
+    const messages = wrapper.get('[data-testid="chat-messages"]')
+    expect(sendChatMessageMock).toHaveBeenCalledWith('Chính sách đổi trả như thế nào?', [])
+    expect(messages.text()).toContain('Chính sách đổi trả')
+    expect(messages.find('[data-testid="chat-citations"]').exists()).toBe(true)
+    expect(messages.find('[data-testid="chat-product-card"]').exists()).toBe(false)
+    expect(messages.find('a').exists()).toBe(false)
   })
 
   it('sends a Vietnamese question and renders the grounded answer with product cards', async () => {

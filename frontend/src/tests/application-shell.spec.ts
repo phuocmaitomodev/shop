@@ -31,7 +31,7 @@ describe('application shell', () => {
     expect(wrapper.get('[data-testid="chat-widget-position"]')).toBeTruthy()
     expect(wrapper.get('[data-testid="chat-toggle"]').attributes('aria-expanded')).toBe('false')
     await wrapper.get('[data-testid="chat-toggle"]').trigger('click')
-    expect(wrapper.get('[role="dialog"]').text()).toContain('Trợ lý sản phẩm')
+    expect(wrapper.get('[role="dialog"]').text()).toContain('Trợ lý mua sắm')
   })
 
   it('provides valid destinations for every shell navigation link', async () => {

@@ -19,9 +19,13 @@ export interface ChatProduct {
 }
 
 export interface ChatSource {
-  product_id: string
+  source_type: 'product' | 'knowledge'
+  source_id: string
   rag_document_id: string
   chunk_ids: string[]
+  product_id: string | null
+  knowledge_type: 'return_policy' | null
+  title: string
 }
 
 export interface ChatResponse {

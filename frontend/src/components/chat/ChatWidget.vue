@@ -2,11 +2,12 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 
 import { sendChatMessage } from '../../services/chat'
-import type { ChatHistoryItem, ChatProduct, ChatStatus } from '../../types/chat'
+import type { ChatHistoryItem, ChatProduct, ChatSource, ChatStatus } from '../../types/chat'
 import ChatProductCard from './ChatProductCard.vue'
 
 interface ChatMessage extends ChatHistoryItem {
   products?: ChatProduct[]
+  sources?: ChatSource[]
   status?: ChatStatus
 }
 
@@ -70,6 +71,7 @@ const submitMessage = async () => {
         role: 'assistant',
         content: response.answer,
         products: response.products,
+        sources: response.sources.filter((source) => source.source_type === 'knowledge'),
         status: response.status,
       },
     ])
@@ -89,6 +91,11 @@ const handleComposerKeydown = (event: KeyboardEvent) => {
   }
 }
 
+const submitSuggestion = async (content: string) => {
+  message.value = content
+  await submitMessage()
+}
+
 onMounted(() => document.addEventListener('keydown', handleEscape))
 onBeforeUnmount(() => document.removeEventListener('keydown', handleEscape))
 </script>
@@ -100,14 +107,14 @@ onBeforeUnmount(() => document.removeEventListener('keydown', handleEscape))
       id="product-chat-panel"
       class="chat-widget__panel"
       role="dialog"
-      aria-label="Trợ lý sản phẩm"
+      aria-label="Trợ lý mua sắm"
     >
       <header class="chat-widget__header">
         <div>
-          <strong>Trợ lý sản phẩm</strong>
-          <p>Hỏi về sản phẩm, màu, size và ngân sách.</p>
+          <strong>Trợ lý mua sắm</strong>
+          <p>Hỏi về sản phẩm, màu, size, ngân sách hoặc chính sách đổi trả.</p>
         </div>
-        <button type="button" aria-label="Đóng trợ lý sản phẩm" @click="close">×</button>
+        <button type="button" aria-label="Đóng trợ lý mua sắm" @click="close">×</button>
       </header>
       <div
         v-if="messages.length"
@@ -137,12 +144,30 @@ onBeforeUnmount(() => document.removeEventListener('keydown', handleEscape))
               :product="product"
             />
           </div>
+          <div
+            v-if="item.sources?.length"
+            class="chat-widget__citations"
+            data-testid="chat-citations"
+          >
+            <span>Nguồn:</span>
+            <ul>
+              <li v-for="source in item.sources" :key="source.source_id">{{ source.title }}</li>
+            </ul>
+          </div>
         </article>
         <p v-if="loading" class="chat-widget__loading" role="status">Đang tìm sản phẩm…</p>
         <p v-if="errorMessage" class="chat-widget__error" role="alert">{{ errorMessage }}</p>
       </div>
       <div v-else class="chat-widget__empty">
         <p>Xin chào! Tôi có thể giúp bạn tìm sản phẩm phù hợp.</p>
+        <button
+          type="button"
+          class="chat-widget__suggestion"
+          data-testid="chat-suggestion-return-policy"
+          @click="submitSuggestion('Chính sách đổi trả như thế nào?')"
+        >
+          Chính sách đổi trả
+        </button>
       </div>
       <form class="chat-widget__composer" @submit.prevent="submitMessage">
         <label class="sr-only" for="chat-message">Câu hỏi về sản phẩm</label>
@@ -166,7 +191,7 @@ onBeforeUnmount(() => document.removeEventListener('keydown', handleEscape))
       data-testid="chat-toggle"
       :aria-expanded="isOpen"
       aria-controls="product-chat-panel"
-      :aria-label="isOpen ? 'Đóng trợ lý sản phẩm' : 'Mở trợ lý sản phẩm'"
+      :aria-label="isOpen ? 'Đóng trợ lý mua sắm' : 'Mở trợ lý mua sắm'"
       @click="toggle"
     >
       <span aria-hidden="true">✦</span>
@@ -287,6 +312,27 @@ onBeforeUnmount(() => document.removeEventListener('keydown', handleEscape))
   display: grid;
   gap: var(--space-2);
   margin-top: var(--space-3);
+}
+
+.chat-widget__citations {
+  margin-top: var(--space-3);
+  color: var(--color-ink-muted);
+  font-size: var(--font-size-sm);
+}
+
+.chat-widget__citations ul {
+  margin: var(--space-1) 0 0;
+  padding-left: var(--space-4);
+}
+
+.chat-widget__suggestion {
+  margin-top: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-pill);
+  background: var(--color-surface);
+  color: var(--color-ink);
+  font-weight: var(--font-weight-bold);
 }
 
 .chat-widget__status {
