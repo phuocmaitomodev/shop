@@ -14,6 +14,8 @@ docker compose run --rm api alembic upgrade head
 docker compose run --rm api python -m app.cli.seed_catalog
 docker compose run --rm api python -m app.cli.verify_catalog
 docker compose run --rm api python -m app.cli.reindex_products
+docker compose run --rm api python -m app.cli.seed_return_policy
+docker compose run --rm api python -m app.cli.verify_return_policy
 docker compose up --build -d
 docker compose ps
 ```

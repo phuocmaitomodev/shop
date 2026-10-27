@@ -43,9 +43,13 @@ class ChatProductResponse(BaseModel):
 
 
 class ChatSourceResponse(BaseModel):
-    product_id: UUID
+    source_type: Literal["product", "knowledge"]
+    source_id: UUID
     rag_document_id: UUID
     chunk_ids: list[UUID]
+    product_id: UUID | None
+    knowledge_type: Literal["return_policy"] | None
+    title: str
 
 
 class ChatResponse(BaseModel):

@@ -55,9 +55,13 @@ class ChatProduct:
 
 @dataclass(frozen=True)
 class ChatSource:
-    product_id: UUID
+    source_type: Literal["product", "knowledge"]
+    source_id: UUID
     rag_document_id: UUID
     chunk_ids: list[UUID]
+    product_id: UUID | None
+    knowledge_type: Literal["return_policy"] | None
+    title: str
 
 
 @dataclass(frozen=True)
@@ -677,9 +681,13 @@ async def orchestrate_chat(
     ]
     sources = [
         ChatSource(
-            product_id=product.product_id,
+            source_type="product",
+            source_id=product.product_id,
             rag_document_id=product.rag_document_id,
             chunk_ids=list(product.chunk_ids),
+            product_id=product.product_id,
+            knowledge_type=None,
+            title=product.name,
         )
         for product in selected
     ]
