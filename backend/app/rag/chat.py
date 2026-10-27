@@ -157,9 +157,15 @@ _RETURN_POLICY_PATTERNS = (
     re.compile(r"\bliên\s+hệ.{0,60}(?:đổi|trả)\b", re.I),
     re.compile(
         r"\b(?:đổi|trả).{0,30}(?:bao\s+(?:nhiêu|lâu)|mấy\s+ngày|điều\s+kiện|"
-        r"phí|chi\s+phí|được\s+không|thế\s+nào|tem|mã\s+đơn|sale|thanh\s+lý)\b",
+        r"phí|chi\s+phí|được\s+không|thế\s+nào|hạn|size|màu|mẫu|tem|"
+        r"mã\s+đơn|sale|thanh\s+lý)\b",
         re.I,
     ),
+    re.compile(
+        r"\b(?:bao\s+lâu|mấy\s+ngày|thời\s+hạn|hạn).{0,35}(?:đổi|trả|hoàn)\b",
+        re.I,
+    ),
+    re.compile(r"\b(?:hỏng|hư\s+hỏng).{0,25}vận\s+chuyển\b", re.I),
     re.compile(
         r"\b(?:đã\s+)?(?:giặt|sử\s+dụng|mất\s+tem|quá\s+hạn).{0,35}"
         r"(?:đổi|trả|hoàn)\b",
@@ -168,8 +174,13 @@ _RETURN_POLICY_PATTERNS = (
 )
 _RETURN_POLICY_FOLLOW_UP = re.compile(
     r"^(?:vậy\s+)?(?:còn\s+)?(?:phí|chi\s+phí|điều\s+kiện|thời\s+hạn|"
-    r"bao\s+lâu|mấy\s+ngày|liên\s+hệ)(?:\s+thì)?\s*(?:sao|thế\s+nào)?\??$",
+    r"bao\s+lâu|mấy\s+ngày|liên\s+hệ)(?:\s+(?:hai\s+chiều))?"
+    r"(?:\s+thì)?\s*(?:sao|thế\s+nào|bên\s+nào\s+chịu|ai\s+chịu)?\??$",
     re.I,
+)
+_RETURN_POLICY_CONFLICTS = (
+    re.compile(r"\bđổi(?:\s+hàng)?.{0,35}\b(?!0?7\b)\d+\s*ngày\b", re.I),
+    re.compile(r"\b(?:trả(?:\s+hàng)?|hoàn\s+tiền).{0,35}\b(?!0?3\b)\d+\s*ngày\b", re.I),
 )
 
 
@@ -341,15 +352,20 @@ class DeterministicChatProvider:
     ) -> ChatPlan:
         current = _deterministic_plan(message)
         user_history = [turn.content for turn in history if turn.role == "user"]
+        intent = _deterministic_intent(message, history)
         return ChatPlan(
-            query=" ".join(
-                [_deterministic_plan(text).query for text in user_history]
-                + [current.query]
-            ).strip(),
+            query=(
+                _policy_retrieval_query(message, history)
+                if intent == "return_policy"
+                else " ".join(
+                    [_deterministic_plan(text).query for text in user_history]
+                    + [current.query]
+                ).strip()
+            ),
             filters=_merge_conversation_filters(
                 ProductRetrievalFilters(), message, history
             ),
-            intent=_deterministic_intent(message, history),
+            intent=intent,
         )
 
     async def select_product_ids(
@@ -642,6 +658,35 @@ def _deterministic_intent(
     return "out_of_scope"
 
 
+def _policy_retrieval_query(
+    message: str, history: Sequence[ChatHistoryTurn]
+) -> str:
+    current = message.strip().lower()
+    context = " ".join(
+        [turn.content.lower() for turn in history if turn.role == "user"] + [current]
+    )
+    clauses: list[str] = []
+
+    def add(signals: Sequence[str], query: str) -> None:
+        if any(signal in context for signal in signals) and query not in clauses:
+            clauses.append(query)
+
+    add(
+        ("giặt", "sử dụng", "mất tem", "quá hạn", "điều kiện", "giấy tờ"),
+        "giặt OR sử dụng OR tem OR phụ kiện OR mã đơn OR kiểm tra",
+    )
+    add(("sale", "thanh lý"), "hàng sale")
+    add(("size", "màu", "mẫu", "chật"), "size OR màu OR mẫu")
+    add(("phí", "chi phí", "bên nào chịu", "ai chịu"), "phí")
+    add(("mã đơn", "thông tin mua"), "mã đơn")
+    add(("liên hệ", "zalo"), "liên hệ OR Zalo")
+    add(("vận chuyển",), "vận chuyển")
+    add(("giao sai", "nhà sản xuất"), "giao sai OR nhà sản xuất")
+    add(("hoàn tiền", "trả hàng", "hạn trả"), "trả hàng tiền")
+    add(("đổi",), "đổi hàng")
+    return " OR ".join(clauses) if clauses else "đổi hàng"
+
+
 def _fallback(status: ChatStatus) -> ChatResult:
     answers = {
         "insufficient_data": (
@@ -689,6 +734,8 @@ def _validated_policy_result(
         or len(set(policy.chunk_ids)) != len(policy.chunk_ids)
     ):
         return None
+    if any(pattern.search(policy.content) for pattern in _RETURN_POLICY_CONFLICTS):
+        return None
     allowed = set(_ALLOWED_POLICY_FACTS)
     facts = []
     for line in policy.content.splitlines():
@@ -730,10 +777,15 @@ async def orchestrate_chat(
     ] = retrieve_knowledge,
 ) -> ChatResult:
     context = " ".join([turn.content for turn in history] + [message])
-    if _is_injection(context):
-        return _fallback("out_of_scope")
-
     intent = _deterministic_intent(message, history)
+    provider_message = message
+    provider_history = history
+    if _is_injection(context):
+        if intent != "return_policy":
+            return _fallback("out_of_scope")
+        provider_message = "Đổi hàng trong bao nhiêu ngày?"
+        provider_history = ()
+
     if intent == "out_of_scope":
         return _fallback("out_of_scope")
 
@@ -752,7 +804,7 @@ async def orchestrate_chat(
             return _fallback("insufficient_data")
 
     try:
-        plan = await chat_provider.plan(message, history)
+        plan = await chat_provider.plan(provider_message, provider_history)
         if plan.intent != intent:
             return _fallback("insufficient_data")
         embeddings = await embedding_provider.embed([plan.query])

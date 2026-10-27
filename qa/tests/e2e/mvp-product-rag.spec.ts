@@ -6,7 +6,15 @@ interface ChatData {
   status: 'ok' | 'insufficient_data' | 'out_of_scope' | 'provider_unavailable'
   answer: string
   products: Array<{ id: string; slug: string; effective_price: number; url: string }>
-  sources: Array<{ product_id: string; chunk_ids: string[] }>
+  sources: Array<{
+    source_type: 'product' | 'knowledge'
+    source_id: string
+    rag_document_id: string
+    chunk_ids: string[]
+    product_id: string | null
+    knowledge_type: 'return_policy' | null
+    title: string
+  }>
 }
 
 const runtimeErrors = new WeakMap<Page, string[]>()
@@ -57,7 +65,7 @@ test('@mvp catalog seed, filter, detail và responsive layout hoạt động end
 test('@mvp chat stub trả product card grounded và link detail hợp lệ', async ({ page }) => {
   await page.goto('/san-pham')
   await page.getByTestId('chat-toggle').click()
-  const dialog = page.getByRole('dialog', { name: 'Trợ lý sản phẩm' })
+  const dialog = page.getByRole('dialog', { name: 'Trợ lý mua sắm' })
   await expect(dialog).toBeVisible()
   await dialog.getByLabel('Câu hỏi về sản phẩm').fill('Tìm áo thun')
   await dialog.getByRole('button', { name: 'Gửi' }).click()
@@ -80,6 +88,44 @@ test('@mvp chat stub trả product card grounded và link detail hợp lệ', as
   await firstProductLink.click()
   await expect(page).toHaveURL(/\/san-pham\/[a-z0-9-]+$/)
   await expect(page.getByRole('heading', { level: 1 })).toBeVisible()
+})
+
+test('@mvp @return-policy API và widget trả policy grounded không có product card', async ({
+  page,
+  request,
+}) => {
+  const apiResponse = await request.post(`${apiBaseURL}/chat`, {
+    data: { message: 'Đổi hàng trong bao nhiêu ngày?' },
+  })
+  expect(apiResponse.ok()).toBe(true)
+  const policy = (await apiResponse.json()).data as ChatData
+  expect(policy.status).toBe('ok')
+  expect(policy.products).toEqual([])
+  expect(policy.answer).toContain('07 ngày')
+  expect(policy.answer).toContain('giao hàng thành công')
+  expect(policy.sources).toHaveLength(1)
+  expect(policy.sources[0]).toMatchObject({
+    source_type: 'knowledge',
+    product_id: null,
+    knowledge_type: 'return_policy',
+    title: 'Chính sách đổi trả',
+  })
+  expect(policy.sources[0].source_id).toMatch(/^[0-9a-f-]{36}$/)
+  expect(policy.sources[0].rag_document_id).toMatch(/^[0-9a-f-]{36}$/)
+  expect(policy.sources[0].chunk_ids.length).toBeGreaterThan(0)
+
+  await page.goto('/san-pham')
+  await page.getByTestId('chat-toggle').click()
+  const dialog = page.getByRole('dialog', { name: 'Trợ lý mua sắm' })
+  await dialog.getByTestId('chat-suggestion-return-policy').click()
+
+  await expect(dialog.getByTestId('chat-status')).toContainText('Đã tìm thấy thông tin phù hợp')
+  await expect(dialog.getByText(/07 ngày/)).toBeVisible()
+  const citations = dialog.getByTestId('chat-citations')
+  await expect(citations).toContainText('Nguồn:')
+  await expect(citations.getByText('Chính sách đổi trả', { exact: true })).toBeVisible()
+  await expect(citations.getByRole('link')).toHaveCount(0)
+  await expect(dialog.getByTestId('chat-product-card')).toHaveCount(0)
 })
 
 test('@mvp API filter và guardrail không trả dữ liệu ngoài retrieval set', async ({ request }) => {

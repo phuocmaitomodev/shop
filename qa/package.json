@@ -8,6 +8,8 @@
     "test:smoke": "playwright test --grep @smoke",
     "test:smoke:chromium": "playwright test --grep @smoke --project=chromium-desktop --project=chromium-mobile",
     "test:mvp": "playwright test --grep @mvp --project=chromium-desktop --project=chromium-mobile",
+    "test:return-policy": "playwright test --grep @return-policy --project=chromium-desktop --project=chromium-mobile",
+    "test:return-policy:corpus": "node scripts/return-policy-corpus.mjs",
     "install:browsers": "playwright install chromium"
   },
   "devDependencies": {

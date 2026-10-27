@@ -617,23 +617,29 @@ async def retrieve_knowledge(
             select(
                 top_sources.c.source_id,
                 top_sources.c.document_id,
-                candidates.c.chunk_id,
+                eligible_chunks.c.chunk_id,
                 top_sources.c.title,
-                candidates.c.content,
+                eligible_chunks.c.content,
                 top_sources.c.rrf_score,
             )
             .join(
-                candidates,
+                eligible_chunks,
                 and_(
-                    candidates.c.source_id == top_sources.c.source_id,
-                    candidates.c.document_id == top_sources.c.document_id,
+                    eligible_chunks.c.source_id == top_sources.c.source_id,
+                    eligible_chunks.c.document_id == top_sources.c.document_id,
                 ),
+            )
+            .where(
+                or_(
+                    eligible_chunks.c.keyword_match.is_(True),
+                    eligible_chunks.c.distance <= 1.0 - similarity_threshold,
+                )
             )
             .order_by(
                 top_sources.c.rrf_score.desc(),
                 top_sources.c.source_id,
                 top_sources.c.document_id,
-                candidates.c.chunk_id,
+                eligible_chunks.c.chunk_id,
             )
         )
     ).all()

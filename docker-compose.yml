@@ -76,6 +76,10 @@ services:
       APP_SECRET_KEY: migration-test-only-secret
       DATABASE_URL: ${DATABASE_URL:?Set DATABASE_URL in .env}
       MIGRATION_DATABASE_URL: ${DATABASE_URL:?Set DATABASE_URL in .env}
+      RAG_KNOWLEDGE_TOP_K: ${RAG_KNOWLEDGE_TOP_K:-3}
+      RAG_KNOWLEDGE_CANDIDATE_LIMIT: ${RAG_KNOWLEDGE_CANDIDATE_LIMIT:-20}
+      RAG_KNOWLEDGE_SIMILARITY_THRESHOLD: ${RAG_KNOWLEDGE_SIMILARITY_THRESHOLD:-0.2}
+      RAG_KNOWLEDGE_RRF_K: ${RAG_KNOWLEDGE_RRF_K:-60}
     depends_on:
       db:
         condition: service_healthy
@@ -85,6 +89,7 @@ services:
         "-W",
         "error",
         "tests/integration/test_postgres_migrations.py",
+        "tests/integration/test_return_policy_lifecycle_postgres.py",
         "tests/integration/test_product_projection_postgres.py",
         "tests/test_rag_index_postgres.py",
         "tests/integration/test_knowledge_retrieval_postgres.py",
