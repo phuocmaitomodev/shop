@@ -1,6 +1,6 @@
 # Acceptance test plan
 
-> **Acceptance gate MVP hiện hành:** Chỉ các gate `MVP-*` trong [`mvp-product-rag-scope.md`](mvp-product-rag-scope.md) quyết định release bản thu gọn. Các test CAT/ADM/RAG/SEC cũ dưới đây được giữ để truy vết yêu cầu gốc và chỉ áp dụng khi nằm trong mapping MVP; hạng mục auth, cart, checkout, order, admin và support không còn là blocker.
+> **Acceptance gate MVP hiện hành:** Các gate `MVP-*` và vertical slice `RET-RAG-*` trong [`mvp-product-rag-scope.md`](mvp-product-rag-scope.md) quyết định release bản thu gọn. Các test CAT/ADM/RAG/SEC cũ dưới đây được giữ để truy vết yêu cầu gốc và chỉ áp dụng khi nằm trong mapping MVP; hạng mục auth, cart, checkout, order, admin và support không còn là blocker.
 
 ## 1. Mục đích
 
@@ -77,6 +77,24 @@ Tài liệu chuyển tiêu chí nghiệm thu trong `request.md` thành các ki�
 | ADM-10 | P1 | Media validation | Ảnh hợp lệ upload local; loại/kích thước/path nguy hiểm bị chặn |
 
 ## 7. Chatbot RAG
+
+### 7.1. Gate release `return_policy`
+
+Mọi oracle policy lấy từ nội dung canonical tại mục 3.4 của
+[`mvp-product-rag-scope.md`](mvp-product-rag-scope.md), không lấy từ câu trả lời mẫu
+của model. Chạy provider stub deterministic cho release gate; Gemini smoke chỉ được
+ghi PASS khi có key ngoài repository và đã chạy thật, nếu không phải ghi SKIP riêng.
+
+| ID | P | Kiểm tra | Cách/Oracle | Kết quả mong đợi |
+|---|---|---|---|---|
+| RET-RAG-01 | P0 | Intent boundary | Hỏi trực tiếp, diễn đạt lại, follow-up về đổi/trả; xen kẽ product query, thời tiết và injection | Route chỉ thuộc `product_search`, `return_policy`, `out_of_scope`; policy variations đúng route, product regression giữ nguyên, ngoài phạm vi/injection fail closed |
+| RET-RAG-02 | P0 | Canonical seed | Trên DB sạch chạy migration → seed → verifier → worker; chạy seed lại; làm sai/thiếu canonical fixture | Đúng một source `Chính sách đổi trả` type `return_policy`, locale `vi`, active; rerun không duplicate/job thừa; verifier fail closed; index current-version thành công |
+| RET-RAG-03 | P0 | Retrieval validity | So sánh policy hợp lệ với FAQ, inactive, pending, failed, stale version; kiểm tra keyword + semantic và dedupe | Chỉ chunk policy tiếng Việt active/indexed/current-version được retrieve; hybrid rank deterministic theo cấu hình, không cộng raw score khác thang |
+| RET-RAG-04 | P0 | Grounded answer | Hỏi riêng 07 ngày đổi, 03 ngày trả/hoàn, điều kiện đã giặt, mã đơn, phí đổi size, hàng sale và liên hệ | Facts là subset chính xác của source; phân biệt 07/03 ngày và phí hai chiều; không tuyệt đối hóa sale; `products=[]`; source/chunk IDs đúng; empty hoặc model output ngoài allow-list → `insufficient_data` |
+| RET-RAG-05 | P0 | Freshness và guardrail | Update policy tạo version mới, trước/sau reindex; archive source; đặt instruction độc hoặc facts xung đột trong user/source | Chỉ version indexed hiện hành được dùng; không trộn stale; archive/không source → `insufficient_data`; không làm theo injection hoặc bịa policy |
+| RET-RAG-06 | P0 | API và widget | Gọi `POST /chat`, mở widget mobile/desktop với policy response và product response regression | Policy trả `status=ok`, `products=[]`, source contract đầy đủ và citation title `Chính sách đổi trả`; không card/link policy giả; product card cũ giữ nguyên; không console error; Zalo chỉ là text liên hệ, không integration/live chat |
+
+### 7.2. Ma trận lịch sử
 
 | ID | P | Kiểm tra | Cách/Oracle | Kết quả mong đợi |
 |---|---|---|---|---|

@@ -26,7 +26,18 @@ npm run test:smoke
 QA_BASE_URL=http://127.0.0.1:5176 \
 QA_API_BASE_URL=http://127.0.0.1:8000/api/v1 \
 npm run test:mvp
+
+# Policy API + widget citation trên desktop/mobile
+npm run test:return-policy
+
+# Toàn bộ case canonical_current trong corpus policy (chạy một lần qua API)
+npm run test:return-policy:corpus
 ```
+
+`test:return-policy:corpus` đọc trực tiếp
+`fixtures/return-policy-questions.json` và fail khi direct, paraphrase,
+follow-up, multi-fact, boundary hoặc prompt-injection regression thiếu fact/citation.
+Script dùng `QA_API_BASE_URL`; không chạy lặp theo browser project.
 
 Cấu hình mặc định dùng Google Chrome cài trên máy (`channel: chrome`). Nếu môi trường CI không có Chrome, chạy `npm run install:browsers` và đổi project sang Chromium bundled trong cấu hình CI tương ứng.
 
@@ -45,3 +56,12 @@ QA_BASE_URL=http://127.0.0.1:5176 npm run test:smoke
 - `QA_DATABASE_SEED_COMMAND`: JSON argv array cho seed deterministic.
 
 Các helper destructive vẫn fail-closed: cần opt-in rõ, database test và command hợp lệ; suite E2E MVP không tự reset database đang chạy.
+
+Lifecycle policy `seed → worker → API/orchestration → update/reindex → archive`
+được kiểm tra trên PostgreSQL rỗng bởi
+`backend/tests/integration/test_return_policy_lifecycle_postgres.py`. Test này nằm
+trong service Compose `migration-test`; nó không mutate database E2E đang chạy.
+
+Live Gemini smoke chỉ được chạy khi credential thật được cung cấp ngoài repository.
+Không có credential thì phải ghi `SKIP`, không được tính là `PASS`; stub deterministic
+và mocked structured-output vẫn là release gate bắt buộc.

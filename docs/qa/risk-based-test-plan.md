@@ -40,6 +40,21 @@ Tại QA-02 hiện chỉ FE-01 và BE-01..03 tồn tại. Automation runnable ch
 | RK-19 | Forgot password/email response lộ account tồn tại | 2×2=4 | P1 | Equal status/body/timing tolerance; token expiry/use-once |
 | RK-20 | Flaky tests do shared DB/session/provider | 2×2=4 | P1 | Per-run namespace, deterministic seed, stub provider, cleanup/trace |
 
+### 3.1. Risk register cho vertical slice `return_policy`
+
+Các risk dưới đây là P0 của gate RET hiện hành và được trace hai chiều với
+`RET-RAG-01..06` trong `docs/qa/return-policy-rag-test-plan.md`. Corpus thực thi dùng
+`qa/fixtures/return-policy-questions.json`.
+
+| Risk ID | Acceptance | Rủi ro | I×L | Kiểm soát/test chính |
+|---|---|---|---:|---|
+| RET-RK-01 | RET-RAG-01 | Intent policy chiếm nhầm product/out-of-scope hoặc bỏ sót diễn đạt lại/follow-up | 3×3=9 | Corpus direct/paraphrase/follow-up/mixed và product regression; allow-list intent; follow-up chỉ route policy khi history policy rõ |
+| RET-RK-02 | RET-RAG-02 | Seed thiếu/sai/trùng canonical source hoặc job/version không idempotent | 3×3=9 | Clean DB migrate→seed→verify→index, reseed snapshot/count, cố ý mutate/remove fixture để verifier fail closed |
+| RET-RK-03 | RET-RAG-03 | Retrieve FAQ, sai locale, inactive, pending/failed hoặc stale chunk; rank/dedupe không ổn định | 3×3=9 | PostgreSQL setup cô lập cho từng state; assert active/indexed/current/vi/type; keyword+semantic; source/chunk membership và dedupe |
+| RET-RK-04 | RET-RAG-04 | Model đảo 07 ngày đổi/03 ngày trả, bịa điều kiện/phí, tuyệt đối hóa hàng sale hoặc tạo citation giả | 3×3=9 | Canonical fact allow-list + forbidden claims; case riêng deadline/phí hai chiều/sale; `products=[]`; output/citation ngoài retrieval set → `insufficient_data` |
+| RET-RK-05 | RET-RAG-05 | Trộn version cũ, dùng source archived/rỗng hoặc làm theo user/source injection và fact xung đột | 3×3=9 | Before/after reindex/archive; stale-only/current+stale; user/source injection; conflicting source fail closed; scan prompt/secret |
+| RET-RK-06 | RET-RAG-06 | API/widget làm mất contract product, hiển thị card/link policy giả hoặc biến Zalo text thành integration/live chat | 3×2=6 | API schema additive + product regression; E2E 1366×768/390×844; citation title-only; không card/UUID URL/action; console/request listeners |
+
 ## 4. Test levels và ownership
 
 | Loại | Mục tiêu | Ví dụ | Khi chạy |

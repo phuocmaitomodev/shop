@@ -79,3 +79,79 @@ Lượt thử đầu tiên làm đúng README cũ đã khởi động worker tr�
 2. **Browser engine**: browser acceptance chạy Google Chrome/Chromium; chưa chạy Firefox/WebKit.
 3. **Hạ tầng máy dùng chung**: Docker address pool và port mặc định đã bị các stack khác chiếm. QA dùng project/port cô lập; đây không phải lỗi ứng dụng.
 4. Các route placeholder ngoài MVP vẫn được smoke về shell/link/console nhưng không được tính là feature acceptance.
+
+## Bổ sung RET-QA-02 — return-policy RAG
+
+Ngày kiểm thử: 2026-10-27. Baseline `origin/main`:
+`4ebf09292ca13d14dbec670634f6699cce620ec9`. Chuỗi local reviewed được port
+theo thứ tự: RET-00 `d346e010d8a47913a18f21731fb066231002c36e`,
+RET-BE-01 `d0f41d8689590ffd972b4cbb6509814b3c68396e`, RET-RAG-01
+`ecf3a20b7c1056dae57c337b343d9979fb81b408`, RET-RAG-02
+`e9c84574a252a4a007c97823fd12b9aa58f131fe`, unique FE tip
+`7a73173fe60cb6692b3da9206bd7be4c262c7640`, rồi unique QA corpus tip
+`99b2e7cb6b7f8d6c86ecdda8a2822d248b43d422`. Không có conflict; các ancestor
+FE/QA patch-equivalent không được cherry-pick lại.
+
+**Kết luận: PASS với provider stub deterministic; live Gemini SKIP.** API trả
+`status=ok`, `products=[]`, citation knowledge hiện hành và policy canonical;
+widget desktop/mobile hiển thị answer + title citation, không dựng link UUID,
+không có product card, console/page/request error. PostgreSQL lifecycle mới chứng
+minh seed/index phiên bản 1, cập nhật/reindex phiên bản 2 và archive/delete chuyển
+chat về `insufficient_data` không source.
+
+Kết quả thực tế:
+
+- Clean bootstrap: migration `0001..0005`, catalog seed/verify `4/20/60`, product
+  reindex `created=20`, policy seed/verify `1 source / 1 projection / 1 job`; worker
+  kết thúc `succeeded=21`; API, PostgreSQL, worker và frontend healthy.
+- PostgreSQL migration/retrieval/worker/lifecycle: **21 passed**; focused policy
+  lifecycle sau RED→GREEN: **2 passed**.
+- Backend image suite: **180 passed, 37 environment-gated skips**. Các PostgreSQL
+  skip đã được chạy riêng trong lane 21 test ở trên; không tính skip là PASS.
+- Frontend Vitest: **91 passed**; production build PASS, 79 modules transformed.
+- QA TypeScript PASS; Playwright listing/detail/product-chat/policy trên desktop
+  1366×768 và mobile 390×844: **8 passed**; full shell + MVP: **58 passed**.
+- Corpus runner đọc trực tiếp fixture và kiểm tra direct, paraphrase, follow-up,
+  multi-fact, boundary cùng prompt injection: **17 canonical_current passed**.
+- Direct API smoke trả `07 ngày`, `products=[]`, `source_type=knowledge`,
+  `knowledge_type=return_policy`, title `Chính sách đổi trả` và chunk hiện hành.
+- Mocked Gemini structured-output nằm trong backend suite và PASS. Môi trường không
+  có `GEMINI_API_KEY` thật ngoài repository nên direct/paraphrase live Gemini được
+  ghi **SKIP (missing credential)**, tuyệt đối không tuyên bố PASS.
+
+Deviation môi trường: Docker daemon đã cạn predefined address pools, nên lượt QA
+dùng lại các project test cô lập có sẵn (`shop-migration-test`, `shop-mvp07`) và
+reset schema test trước khi migrate; không dùng hoặc sửa database ứng dụng người dùng.
+
+## Clean-room gate RET-REL-01
+
+Ngày kiểm thử: 2026-10-27. Release branch được dựng lại từ `origin/main`
+`4ebf09292ca13d14dbec670634f6699cce620ec9` bằng đúng chuỗi patch-equivalent đã
+review: RET-00 → RET-BE-01 → RET-RAG-01 → RET-RAG-02 → RET-FE-01 → RET-QA-01 →
+RET-QA-02. Các branch con được supersede cho mục đích tạo PR.
+
+Independent review phát hiện và gate đã sửa ba lớp lỗi trước khi release: câu sửa
+filter “Đổi sang …” bị route nhầm sang policy, tín hiệu phí policy bị route nhầm
+sang product, và structured output không hợp lệ bị báo `provider_unavailable` thay
+vì `insufficient_data`. Validator source cũng fail closed với claim xung đột về
+deadline, điều kiện, phí, hàng sale và liên hệ/duyệt.
+
+Clean-room dùng Compose project `shop-retrel01`, subnet `10.251.0.0/24`, frontend
+`45176`, API `48000`, PostgreSQL `45432`; lane PostgreSQL độc lập dùng project
+`shop-retrel01-pg`, subnet `10.252.0.0/24`. Migration `0001..0005`, catalog
+seed/verifier `4/20/60`, product reindex `created=20`, policy seed/verifier và
+worker queue `succeeded=21` đều PASS; API, DB, worker và frontend healthy.
+
+Kết quả cuối:
+
+- Backend image suite: **182 passed, 37 environment-gated skips**; lane PostgreSQL
+  sạch chạy riêng: **21 passed**.
+- Frontend Vitest: **91 passed**; production build PASS, 79 modules transformed.
+- QA TypeScript PASS; toàn bộ Playwright desktop/mobile, gồm console/request/link,
+  catalog, product chat và policy widget: **58 passed**.
+- OpenAPI knowledge-source contract và direct policy API smoke PASS.
+- Corpus `canonical_current`: **17/17 passed**. Các setup stateful/negative còn lại
+  được thực thi ở backend unit/PostgreSQL lifecycle/retrieval suites, không được
+  script API này đếm lặp như canonical case.
+- Secret scan và `git diff --check` PASS. Live Gemini vẫn **SKIP (missing
+  credential)**; mocked structured-output và stub deterministic PASS.

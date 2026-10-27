@@ -43,6 +43,10 @@ def _client(monkeypatch) -> TestClient:
                     product_id=PRODUCT_ID,
                     rag_document_id=DOCUMENT_ID,
                     chunk_ids=[CHUNK_ID],
+                    source_type="product",
+                    source_id=PRODUCT_ID,
+                    knowledge_type=None,
+                    title="Áo thun đen",
                 )
             ],
             status="ok",
@@ -70,11 +74,58 @@ def test_chat_endpoint_contract_and_hydrated_response(monkeypatch) -> None:
     assert payload["data"]["products"][0]["id"] == str(PRODUCT_ID)
     assert payload["data"]["products"][0]["url"] == "/san-pham/ao-thun-den"
     assert payload["data"]["sources"][0] == {
+        "source_type": "product",
+        "source_id": str(PRODUCT_ID),
         "product_id": str(PRODUCT_ID),
         "rag_document_id": str(DOCUMENT_ID),
         "chunk_ids": [str(CHUNK_ID)],
+        "knowledge_type": None,
+        "title": "Áo thun đen",
     }
     assert payload["meta"]["request_id"]
+
+
+def test_chat_endpoint_serializes_return_policy_knowledge_source(monkeypatch) -> None:
+    async def fake_policy_orchestrate(**_kwargs):
+        return ChatResult(
+            answer="Bạn có thể đổi hàng trong 07 ngày.",
+            products=[],
+            sources=[
+                ChatSource(
+                    source_type="knowledge",
+                    source_id=PRODUCT_ID,
+                    rag_document_id=DOCUMENT_ID,
+                    chunk_ids=[CHUNK_ID],
+                    product_id=None,
+                    knowledge_type="return_policy",
+                    title="Chính sách đổi trả",
+                )
+            ],
+            status="ok",
+        )
+
+    client = _client(monkeypatch)
+    monkeypatch.setattr(chat_api, "orchestrate_chat", fake_policy_orchestrate)
+    with client:
+        response = client.post("/api/v1/chat", json={"message": "Đổi hàng thế nào?"})
+
+    assert response.status_code == 200
+    assert response.json()["data"] == {
+        "answer": "Bạn có thể đổi hàng trong 07 ngày.",
+        "products": [],
+        "sources": [
+            {
+                "source_type": "knowledge",
+                "source_id": str(PRODUCT_ID),
+                "rag_document_id": str(DOCUMENT_ID),
+                "chunk_ids": [str(CHUNK_ID)],
+                "product_id": None,
+                "knowledge_type": "return_policy",
+                "title": "Chính sách đổi trả",
+            }
+        ],
+        "status": "ok",
+    }
 
 
 def test_chat_request_bounds_message_and_history(monkeypatch) -> None:
@@ -121,6 +172,20 @@ def test_openapi_exposes_public_bounded_chat_contract(client: TestClient) -> Non
         "insufficient_data",
         "out_of_scope",
         "provider_unavailable",
+    }
+    source_schema = schema["components"]["schemas"]["ChatSourceResponse"]
+    assert set(source_schema["required"]) == {
+        "source_type",
+        "source_id",
+        "rag_document_id",
+        "chunk_ids",
+        "product_id",
+        "knowledge_type",
+        "title",
+    }
+    assert set(source_schema["properties"]["source_type"]["enum"]) == {
+        "product",
+        "knowledge",
     }
 
 

@@ -1,6 +1,6 @@
 # API contract frontend ↔ backend
 
-> **Contract MVP hiện hành:** Surface bắt buộc được thu gọn còn `GET /api/v1/products`, `GET /api/v1/products/{slug}` và `POST /api/v1/chat` như định nghĩa trong [`mvp-product-rag-scope.md`](mvp-product-rag-scope.md). Các nhóm API auth/cart/order/admin/support dưới đây được giữ làm contract mục tiêu lịch sử và không thuộc release gate MVP.
+> **Contract MVP hiện hành:** Surface bắt buộc được thu gọn còn `GET /api/v1/products`, `GET /api/v1/products/{slug}` và `POST /api/v1/chat` như định nghĩa trong [`mvp-product-rag-scope.md`](mvp-product-rag-scope.md). Vertical slice `return_policy` mở rộng chính `POST /chat`, không thêm endpoint hoặc khôi phục knowledge/admin/support tổng quát. Các nhóm API auth/cart/order/admin/support dưới đây được giữ làm contract mục tiêu lịch sử và không thuộc release gate MVP.
 
 ## 1. Quy ước chung
 
@@ -130,6 +130,40 @@ link sản phẩm có dạng `/san-pham/{slug}`. Endpoint không tạo session, 
 lưu lịch sử. Các endpoint session/support bên dưới là contract lịch sử ngoài MVP.
 Endpoint áp dụng rate limit theo IP và trả error envelope `RATE_LIMITED` với HTTP
 429 khi vượt ngưỡng cấu hình.
+
+Intent nội bộ có allow-list đóng `product_search | return_policy | out_of_scope`.
+Intent không phải field response công khai; câu hỏi policy không được đi qua product
+selector, còn product query hiện hành không được đổi semantics. Câu follow-up chỉ
+được phân loại `return_policy` khi history giới hạn cung cấp ngữ cảnh policy rõ ràng.
+
+Mỗi phần tử `sources` dùng schema additive sau:
+
+```json
+{
+  "source_type": "knowledge",
+  "source_id": "uuid",
+  "rag_document_id": "uuid",
+  "chunk_ids": ["uuid"],
+  "product_id": null,
+  "knowledge_type": "return_policy",
+  "title": "Chính sách đổi trả"
+}
+```
+
+- `source_type` thuộc `product | knowledge`; `source_id`, `rag_document_id` và mọi
+  `chunk_ids` phải thuộc retrieval set đã validate.
+- Product source giữ `product_id`, đặt `knowledge_type=null`; knowledge source đặt
+  `product_id=null`. Trong slice này `knowledge_type` chỉ nhận `return_policy`.
+- Policy chỉ trả `status=ok` khi knowledge source, projection và chunk đều active,
+  projection đã `indexed`, locale `vi` và tất cả cùng current `source_version`.
+  Response đó luôn có `products=[]`. Không có source hợp lệ thì trả
+  `status=insufficient_data`, không dùng source stale/pending/failed để suy đoán.
+- Citation UI chỉ render `title`; contract chưa cung cấp policy URL/public page và
+  client không được dựng link từ UUID.
+
+Policy canonical và các facts bắt buộc được khóa tại mục 3.4 của
+[`mvp-product-rag-scope.md`](mvp-product-rag-scope.md). Zalo trong policy là text
+liên hệ duy nhất; API không tạo integration/live-chat action.
 
 | Method | Path | Mục đích |
 |---|---|---|

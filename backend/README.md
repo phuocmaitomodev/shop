@@ -96,6 +96,22 @@ Both commands exit `0` on success and `1` on a validation, collision or database
 error. Seed images use the internal `/media/placeholders/catalog-product.svg` asset
 served by the API container.
 
+### Deterministic return-policy source
+
+After catalog projection, seed the canonical Vietnamese return policy and verify its
+knowledge source, RAG projection, checksum, current version and index outbox job:
+
+```bash
+docker compose --env-file .env.example run --rm api python -m app.cli.seed_return_policy
+docker compose --env-file .env.example run --rm api python -m app.cli.verify_return_policy
+```
+
+The seed owns stable UUIDs for the policy source, projection and each versioned job.
+An unchanged rerun creates no new row or job. A canonical content change advances
+the source and projection once and enqueues exactly one job for the new version. A
+collision or partial/mismatched state exits nonzero and the first seed transaction
+rolls back atomically.
+
 ### Product projection and reindex
 
 After seeding, synchronize public catalog products into the durable RAG projection

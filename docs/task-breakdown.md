@@ -1,6 +1,6 @@
 # Task breakdown và dependency
 
-> **Kế hoạch thực thi hiện hành:** Kanban phải theo critical path `MVP-01..07` trong [`mvp-product-rag-scope.md`](mvp-product-rag-scope.md). Các task BE/FE/RAG/QA đầy đủ bên dưới là backlog lịch sử; task ngoài catalog công khai, product detail tối giản và chat RAG sản phẩm phải archive khỏi board MVP.
+> **Kế hoạch thực thi hiện hành:** Kanban theo critical path `MVP-01..07` và vertical slice `RET-*` có giới hạn trong [`mvp-product-rag-scope.md`](mvp-product-rag-scope.md). `RET-*` chỉ bổ sung một source `return_policy` qua endpoint chat hiện hành; không khôi phục roadmap knowledge/admin/support tổng quát. Các task BE/FE/RAG/QA đầy đủ bên dưới là backlog lịch sử; task ngoài catalog công khai, product detail tối giản, chat RAG sản phẩm và slice `return_policy` phải archive khỏi board MVP.
 
 ## 1. Mục tiêu điều phối
 
@@ -187,3 +187,35 @@ Các default dưới đây đã được kiến trúc đề xuất nhưng điề
 6. Giới hạn upload, pagination, rate limit và RAG top-k/threshold ban đầu.
 
 Nếu chưa chốt, dùng giá trị cấu hình/an toàn và ghi rõ trong README/test; không hard-code rải rác.
+
+## 12. Vertical slice `return_policy` hiện hành
+
+Đây là kế hoạch bổ sung có ưu tiên cao hơn các task knowledge RAG lịch sử ở mục 4–9.
+Mỗi worker phải đọc commit/handoff của parent, dùng đúng full SHA đã review và block
+fail-closed nếu thiếu bằng chứng; không tự khôi phục admin CRUD, session persistence,
+support ticket, public policy page hoặc các knowledge type khác.
+
+| ID | Owner | Deliverable | Depends on | Acceptance/handoff |
+|---|---|---|---|---|
+| RET-00 | `shop-orchestrator` | Khóa scope, source schema, policy canonical, acceptance và graph trong 4 docs contract | MVP baseline trên `main` | RET-RAG-01..06; commit docs riêng, diff-check, không đổi `request.md` |
+| RET-BE-01 | `shop-backend` | Chat source contract additive; seed/verifier deterministic/idempotent cho `return_policy`; projection + index job current version | RET-00 | RET-RAG-02/04/06; OpenAPI và tests, không migration nếu schema hiện có đủ |
+| RET-RAG-01 | `shop-rag` | Hybrid pgvector + PostgreSQL FTS retrieval, filter active/indexed/current-version, top-k/dedupe deterministic | RET-00 | RET-RAG-02..05; unit + PostgreSQL integration và product retrieval regression |
+| RET-QA-01 | `shop-qa` | Traceability matrix, corpus tiếng Việt và oracle canonical/negative/injection/stale | RET-00 | RET-RAG-01..06; fixture machine-readable và risk mapping |
+| RET-RAG-02 | `shop-rag` | Intent allow-list, orchestration policy grounded, validator IDs/chunks, `products=[]` và fallback | RET-BE-01, RET-RAG-01 | RET-RAG-01..06; deterministic/Gemini boundary tests và product chat regression |
+| RET-FE-01 | `shop-frontend` | Types/client additive; widget hiện answer + citation title, không card/link policy giả | RET-00, RET-BE-01 | RET-RAG-06; Vitest + build, giữ mobile/a11y/history/error behavior |
+| RET-QA-02 | `shop-qa` | Clean DB migrate/seed/index → API/widget E2E; update/reindex/archive; stub release và Gemini smoke có điều kiện | RET-RAG-02, RET-FE-01, RET-QA-01 | RET-RAG-01..06; backend/PostgreSQL/frontend/build/Playwright và release evidence |
+| RET-REL-01 | `shop-orchestrator` | Review full SHAs, clean-room gate, canonical local integration và PR-ready handoff | Tất cả task trên | RET-RAG-01..06; không push/merge, ghi base/final SHA, files/tests/impact/order/risks |
+
+```text
+RET-00
+  ├─ RET-BE-01 ───────────────┬─→ RET-RAG-02 ─┐
+  │                           └─→ RET-FE-01 ───┤
+  ├─ RET-RAG-01 ─────────────────→ RET-RAG-02 ├─→ RET-QA-02 → RET-REL-01
+  └─ RET-QA-01 ─────────────────────────────────┘
+```
+
+Contract freeze của slice gồm intent `product_search|return_policy|out_of_scope`,
+source fields `source_type`, `source_id`, `rag_document_id`, `chunk_ids`, nullable
+`product_id`, nullable `knowledge_type`, `title`, cùng policy canonical ở
+`mvp-product-rag-scope.md`. Breaking change ngoài tập này phải quay lại RET-00; worker
+không tự đổi schema/API rồi yêu cầu consumer thích nghi.
