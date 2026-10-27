@@ -65,6 +65,34 @@ def test_rag_worker_settings_have_safe_defaults(monkeypatch) -> None:
     assert settings.rag_worker_health_max_age_seconds == 150.0
 
 
+def test_knowledge_retrieval_settings_have_bounded_defaults(monkeypatch) -> None:
+    monkeypatch.setenv("APP_ENV", "test")
+    monkeypatch.setenv("APP_SECRET_KEY", "test-only-secret")
+    monkeypatch.setenv("DATABASE_URL", "postgresql+asyncpg://shop:shop@db:5432/shop")
+    monkeypatch.delenv("RAG_KNOWLEDGE_TOP_K", raising=False)
+    monkeypatch.delenv("RAG_KNOWLEDGE_CANDIDATE_LIMIT", raising=False)
+    monkeypatch.delenv("RAG_KNOWLEDGE_SIMILARITY_THRESHOLD", raising=False)
+    monkeypatch.delenv("RAG_KNOWLEDGE_RRF_K", raising=False)
+
+    settings = Settings(_env_file=None)
+
+    assert settings.rag_knowledge_top_k == 3
+    assert settings.rag_knowledge_candidate_limit == 20
+    assert settings.rag_knowledge_similarity_threshold == 0.2
+    assert settings.rag_knowledge_rrf_k == 60
+
+
+def test_knowledge_candidate_limit_cannot_be_below_top_k(monkeypatch) -> None:
+    monkeypatch.setenv("APP_ENV", "test")
+    monkeypatch.setenv("APP_SECRET_KEY", "test-only-secret")
+    monkeypatch.setenv("DATABASE_URL", "postgresql+asyncpg://shop:shop@db:5432/shop")
+    monkeypatch.setenv("RAG_KNOWLEDGE_TOP_K", "4")
+    monkeypatch.setenv("RAG_KNOWLEDGE_CANDIDATE_LIMIT", "3")
+
+    with pytest.raises(ValidationError, match="RAG_KNOWLEDGE_CANDIDATE_LIMIT"):
+        Settings(_env_file=None)
+
+
 def test_gemini_embedding_provider_requires_key_and_model(monkeypatch) -> None:
     monkeypatch.setenv("APP_ENV", "test")
     monkeypatch.setenv("APP_SECRET_KEY", "test-only-secret")

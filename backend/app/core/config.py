@@ -35,6 +35,10 @@ class Settings(BaseSettings):
     rag_worker_retry_max_seconds: int = Field(default=300, gt=0)
     rag_worker_poll_seconds: float = Field(default=2.0, gt=0)
     rag_worker_health_max_age_seconds: float = Field(default=150.0, gt=0)
+    rag_knowledge_top_k: int = Field(default=3, ge=1, le=20)
+    rag_knowledge_candidate_limit: int = Field(default=20, ge=1, le=100)
+    rag_knowledge_similarity_threshold: float = Field(default=0.2, ge=0, le=1)
+    rag_knowledge_rrf_k: int = Field(default=60, ge=1, le=1_000)
 
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -47,6 +51,11 @@ class Settings(BaseSettings):
     def require_secure_production_cookie(self) -> "Settings":
         if self.app_env == "production" and not self.auth_cookie_secure:
             raise ValueError("AUTH_COOKIE_SECURE must be true in production")
+        if self.rag_knowledge_candidate_limit < self.rag_knowledge_top_k:
+            raise ValueError(
+                "RAG_KNOWLEDGE_CANDIDATE_LIMIT must be greater than or equal to "
+                "RAG_KNOWLEDGE_TOP_K"
+            )
         if self.embedding_dimension != 768:
             raise ValueError("EMBEDDING_DIMENSION must be 768 for the current migration")
         if self.rag_embedding_provider == "gemini" and (
