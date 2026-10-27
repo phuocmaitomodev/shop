@@ -35,6 +35,16 @@ _ALLOWED_POLICY_FACTS = tuple(
     for line in RETURN_POLICY_CONTENT.splitlines()
     if line.startswith("- ") or line.startswith("Mộc Store,")
 )
+_ALLOWED_POLICY_CONTEXT = frozenset(
+    [RETURN_POLICY.title]
+    + [
+        line.strip()
+        for line in RETURN_POLICY_CONTENT.splitlines()
+        if line.strip()
+        and not line.startswith("- ")
+        and not line.startswith("Mộc Store,")
+    ]
+)
 
 
 @dataclass(frozen=True)
@@ -84,6 +94,10 @@ class ChatResult:
 
 class ChatProviderError(Exception):
     """Sanitized generation-provider failure safe to map to a public fallback."""
+
+
+class InvalidChatProviderResponse(ChatProviderError):
+    """Provider responded, but its structured output failed validation."""
 
 
 class ChatProvider(Protocol):
@@ -178,9 +192,25 @@ _RETURN_POLICY_FOLLOW_UP = re.compile(
     r"(?:\s+thì)?\s*(?:sao|thế\s+nào|bên\s+nào\s+chịu|ai\s+chịu)?\??$",
     re.I,
 )
+_PRODUCT_CORRECTION = re.compile(
+    r"\bđổi(?:\s+(?:sang|thành))?\s+(?:màu|size|giá|dưới|trên)\b",
+    re.I,
+)
+_POLICY_DETAIL_SIGNAL = re.compile(
+    r"\b(?:hỗ\s+trợ|phí|chi\s+phí|mất\s+phí|ai\s+chịu|bên\s+nào\s+chịu|được\s+không|"
+    r"điều\s+kiện|bao\s+(?:nhiêu|lâu)|mấy\s+ngày|thời\s+hạn|hạn|sale|"
+    r"thanh\s+lý|tem|mã\s+đơn|liên\s+hệ)\b",
+    re.I,
+)
 _RETURN_POLICY_CONFLICTS = (
     re.compile(r"\bđổi(?:\s+hàng)?.{0,35}\b(?!0?7\b)\d+\s*ngày\b", re.I),
     re.compile(r"\b(?:trả(?:\s+hàng)?|hoàn\s+tiền).{0,35}\b(?!0?3\b)\d+\s*ngày\b", re.I),
+    re.compile(r"\bhàng\s+(?:đã\s+)?(?:giặt|sử\s+dụng|sửa).{0,35}\b(?:vẫn|đủ)\b", re.I),
+    re.compile(r"\bkhông\s+cần.{0,35}\b(?:mã\s+đơn|thông\s+tin\s+mua\s+hàng)\b", re.I),
+    re.compile(r"\b(?:chỉ\s+)?(?:một|1)\s+chiều.{0,20}\bphí\b", re.I),
+    re.compile(r"\bshop\s+luôn\s+chịu.{0,20}\bphí\b", re.I),
+    re.compile(r"\bhàng\s+(?:sale|thanh\s+lý).{0,30}\b(?:luôn|không\s+bao\s+giờ)\b", re.I),
+    re.compile(r"\b(?:tự\s+động\s+duyệt|không\s+cần.{0,30}\bliên\s+hệ)\b", re.I),
 )
 
 
@@ -472,13 +502,13 @@ class GeminiChatProvider:
                 ),
             )
         except (KeyError, TypeError, ValueError):
-            raise ChatProviderError("invalid_provider_response") from None
+            raise InvalidChatProviderResponse("invalid_provider_response") from None
         if not query or (
             filters.min_price is not None
             and filters.max_price is not None
             and filters.min_price > filters.max_price
         ):
-            raise ChatProviderError("invalid_provider_response")
+            raise InvalidChatProviderResponse("invalid_provider_response")
         return ChatPlan(query=query, filters=filters, intent=intent)
 
     async def select_product_ids(
@@ -520,7 +550,7 @@ class GeminiChatProvider:
                 raise TypeError
             return tuple(UUID(str(value)) for value in raw_ids)
         except (KeyError, TypeError, ValueError):
-            raise ChatProviderError("invalid_provider_response") from None
+            raise InvalidChatProviderResponse("invalid_provider_response") from None
 
     async def _generate_json(self, prompt: str, schema: dict) -> dict:
         endpoint = (
@@ -543,9 +573,9 @@ class GeminiChatProvider:
             text = response.json()["candidates"][0]["content"]["parts"][0]["text"]
             parsed = json.loads(text)
         except (ValueError, KeyError, IndexError, TypeError):
-            raise ChatProviderError("invalid_provider_response") from None
+            raise InvalidChatProviderResponse("invalid_provider_response") from None
         if not isinstance(parsed, dict):
-            raise ChatProviderError("invalid_provider_response")
+            raise InvalidChatProviderResponse("invalid_provider_response")
         return parsed
 
     async def _request(
@@ -646,6 +676,12 @@ def _deterministic_intent(
     message: str, history: Sequence[ChatHistoryTurn]
 ) -> ChatIntent:
     normalized = message.strip().lower()
+    if (
+        _PRODUCT_CORRECTION.search(normalized)
+        and not _POLICY_DETAIL_SIGNAL.search(normalized)
+        and _is_catalog_scope(message, history)
+    ):
+        return "product_search"
     if _has_return_policy_signal(normalized):
         return "return_policy"
     if _RETURN_POLICY_FOLLOW_UP.fullmatch(normalized) and any(
@@ -739,11 +775,18 @@ def _validated_policy_result(
     allowed = set(_ALLOWED_POLICY_FACTS)
     facts = []
     for line in policy.content.splitlines():
-        fact = line.strip().removeprefix("- ").strip()
+        raw_line = line.strip()
+        if not raw_line:
+            continue
+        fact = raw_line.removeprefix("- ").strip()
         if fact in allowed:
             if fact in facts:
                 return None
             facts.append(fact)
+        elif raw_line in _ALLOWED_POLICY_CONTEXT or _is_injection(raw_line):
+            continue
+        else:
+            return None
     if not facts:
         return None
     return ChatResult(
@@ -809,7 +852,7 @@ async def orchestrate_chat(
             return _fallback("insufficient_data")
         embeddings = await embedding_provider.embed([plan.query])
         if len(embeddings) != 1:
-            raise ChatProviderError("invalid_embedding_response")
+            raise InvalidChatProviderResponse("invalid_embedding_response")
         if intent == "return_policy":
             retrieved_knowledge = await knowledge_retriever(
                 session, plan.query, embeddings[0]
@@ -832,6 +875,8 @@ async def orchestrate_chat(
         proposed_ids = await chat_provider.select_product_ids(
             message, history, retrieved
         )
+    except InvalidChatProviderResponse:
+        return _fallback("insufficient_data")
     except (ChatProviderError, RetryableIndexingError, PermanentIndexingError):
         return _fallback("provider_unavailable")
     except ValueError:

@@ -122,3 +122,36 @@ Kết quả thực tế:
 Deviation môi trường: Docker daemon đã cạn predefined address pools, nên lượt QA
 dùng lại các project test cô lập có sẵn (`shop-migration-test`, `shop-mvp07`) và
 reset schema test trước khi migrate; không dùng hoặc sửa database ứng dụng người dùng.
+
+## Clean-room gate RET-REL-01
+
+Ngày kiểm thử: 2026-10-27. Release branch được dựng lại từ `origin/main`
+`4ebf09292ca13d14dbec670634f6699cce620ec9` bằng đúng chuỗi patch-equivalent đã
+review: RET-00 → RET-BE-01 → RET-RAG-01 → RET-RAG-02 → RET-FE-01 → RET-QA-01 →
+RET-QA-02. Các branch con được supersede cho mục đích tạo PR.
+
+Independent review phát hiện và gate đã sửa ba lớp lỗi trước khi release: câu sửa
+filter “Đổi sang …” bị route nhầm sang policy, tín hiệu phí policy bị route nhầm
+sang product, và structured output không hợp lệ bị báo `provider_unavailable` thay
+vì `insufficient_data`. Validator source cũng fail closed với claim xung đột về
+deadline, điều kiện, phí, hàng sale và liên hệ/duyệt.
+
+Clean-room dùng Compose project `shop-retrel01`, subnet `10.251.0.0/24`, frontend
+`45176`, API `48000`, PostgreSQL `45432`; lane PostgreSQL độc lập dùng project
+`shop-retrel01-pg`, subnet `10.252.0.0/24`. Migration `0001..0005`, catalog
+seed/verifier `4/20/60`, product reindex `created=20`, policy seed/verifier và
+worker queue `succeeded=21` đều PASS; API, DB, worker và frontend healthy.
+
+Kết quả cuối:
+
+- Backend image suite: **182 passed, 37 environment-gated skips**; lane PostgreSQL
+  sạch chạy riêng: **21 passed**.
+- Frontend Vitest: **91 passed**; production build PASS, 79 modules transformed.
+- QA TypeScript PASS; toàn bộ Playwright desktop/mobile, gồm console/request/link,
+  catalog, product chat và policy widget: **58 passed**.
+- OpenAPI knowledge-source contract và direct policy API smoke PASS.
+- Corpus `canonical_current`: **17/17 passed**. Các setup stateful/negative còn lại
+  được thực thi ở backend unit/PostgreSQL lifecycle/retrieval suites, không được
+  script API này đếm lặp như canonical case.
+- Secret scan và `git diff --check` PASS. Live Gemini vẫn **SKIP (missing
+  credential)**; mocked structured-output và stub deterministic PASS.

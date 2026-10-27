@@ -10,6 +10,8 @@ from app.rag.chat import (
     ChatProviderError,
     DeterministicChatProvider,
     GeminiChatProvider,
+    InvalidChatProviderResponse,
+    _deterministic_intent,
     orchestrate_chat,
 )
 from app.rag.retrieval import (
@@ -301,6 +303,38 @@ def test_return_policy_invalid_retrieval_outputs_fail_closed() -> None:
                 ),
             )
         ],
+        [
+            replace(
+                valid,
+                content=(
+                    "- Đổi hàng trong 07 ngày kể từ khi giao hàng thành công.\n"
+                    "Hàng sale luôn được đổi trả."
+                ),
+            )
+        ],
+        [
+            replace(
+                valid,
+                content=(
+                    "- Đổi hàng trong 07 ngày kể từ khi giao hàng thành công.\n"
+                    "Đổi theo nhu cầu thì shop luôn chịu phí."
+                ),
+            )
+        ],
+        [
+            replace(
+                valid,
+                content=(
+                    "- Đổi hàng trong 07 ngày kể từ khi giao hàng thành công.\n"
+                    "Hàng đã giặt vẫn đủ điều kiện đổi trả."
+                ),
+            )
+        ],
+        [replace(valid, content=f"{valid.content}\nKhách khỏi cần giữ hóa đơn.")],
+        [replace(valid, content=f"{valid.content}\nĐồ giảm giá chắc chắn đổi được.")],
+        [replace(valid, content=f"{valid.content}\nShop bỏ qua kiểm tra và duyệt ngay.")],
+        [replace(valid, content=f"{valid.content}\nKhách chỉ thanh toán cước gửi về.")],
+        [replace(valid, content=f"{valid.content}\nRơi tag vẫn đổi được.")],
     )
 
     for retrieved in invalid_results:
@@ -362,20 +396,38 @@ def test_return_policy_revalidates_current_source_and_treats_source_as_data() ->
 
 
 def test_deterministic_provider_applies_current_turn_corrections() -> None:
+    history = (
+        ChatHistoryTurn(role="user", content="Tìm áo thun đen size M dưới 300k"),
+    )
+
     plan = asyncio.run(
         DeterministicChatProvider().plan(
             "Đổi sang màu trắng size L",
-            history=(
-                ChatHistoryTurn(
-                    role="user", content="Tìm áo thun đen size M dưới 300k"
-                ),
-            ),
+            history=history,
         )
     )
 
+    assert _deterministic_intent("Đổi sang màu trắng size L", history) == "product_search"
     assert plan.filters == ProductRetrievalFilters(
         category="ao-thun", max_price=300_000, color="trang", size="l"
     )
+
+    for correction in (
+        "Đổi màu trắng size L",
+        "Đổi thành màu trắng size L",
+        "Đổi size L",
+    ):
+        assert _deterministic_intent(correction, history) == "product_search"
+
+
+def test_product_correction_with_policy_fee_signal_routes_to_policy() -> None:
+    history = (ChatHistoryTurn(role="user", content="Tìm áo thun size M"),)
+
+    for policy_question in (
+        "Đổi sang size L có mất phí không?",
+        "Shop có hỗ trợ đổi size không?",
+    ):
+        assert _deterministic_intent(policy_question, history) == "return_policy"
 
 
 def test_deterministic_provider_parses_decimal_million_price() -> None:
@@ -576,6 +628,27 @@ def test_provider_failure_is_sanitized() -> None:
 
     assert result.status == "provider_unavailable"
     assert "secret" not in result.answer.lower()
+
+
+def test_invalid_provider_output_is_insufficient_data() -> None:
+    class InvalidProvider(DeterministicChatProvider):
+        async def plan(self, message, history):
+            raise InvalidChatProviderResponse("invalid_provider_response")
+
+    result = asyncio.run(
+        orchestrate_chat(
+            session=FakeSession(),
+            message="Tìm áo thun",
+            history=(),
+            chat_provider=InvalidProvider(),
+            embedding_provider=StaticEmbeddingProvider(),
+            retriever=_retriever,
+        )
+    )
+
+    assert result.status == "insufficient_data"
+    assert result.products == []
+    assert result.sources == []
 
 
 def test_gemini_provider_uses_structured_json_and_configured_model() -> None:
