@@ -11,6 +11,7 @@ from sqlalchemy.pool import NullPool
 from app.models.knowledge import RagDocument, RagIndexJob
 from app.rag.provider import DeterministicEmbeddingProvider
 from app.rag.worker import RagIndexWorker, WorkerOptions
+from tests.integration.database_guard import require_fresh_migrated_database
 
 
 DATABASE_URL = os.getenv("MIGRATION_DATABASE_URL")
@@ -22,6 +23,7 @@ pytestmark = pytest.mark.skipif(
 
 def test_postgres_skip_locked_claims_unlocked_job_without_waiting() -> None:
     assert DATABASE_URL is not None
+    require_fresh_migrated_database(DATABASE_URL)
 
     async def exercise_claims() -> None:
         engine = create_async_engine(DATABASE_URL, poolclass=NullPool)
@@ -142,6 +144,7 @@ def test_postgres_rag_chunk_indexes_match_contract() -> None:
 
 def test_postgres_worker_persists_normalized_vector() -> None:
     assert DATABASE_URL is not None
+    require_fresh_migrated_database(DATABASE_URL)
 
     async def exercise_worker() -> None:
         engine = create_async_engine(DATABASE_URL, poolclass=NullPool)
@@ -198,6 +201,7 @@ def test_postgres_worker_persists_normalized_vector() -> None:
 
 def test_postgres_expired_lease_fences_old_worker() -> None:
     assert DATABASE_URL is not None
+    require_fresh_migrated_database(DATABASE_URL)
 
     async def exercise_lease_fence() -> None:
         engine = create_async_engine(DATABASE_URL, poolclass=NullPool)
@@ -278,6 +282,7 @@ def test_postgres_expired_lease_fences_old_worker() -> None:
 
 def test_postgres_recovery_skips_locked_stale_job() -> None:
     assert DATABASE_URL is not None
+    require_fresh_migrated_database(DATABASE_URL)
 
     async def exercise_recovery_contention() -> None:
         engine = create_async_engine(DATABASE_URL, poolclass=NullPool)

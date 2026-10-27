@@ -1,6 +1,6 @@
 # QA automation foundation
 
-Thư mục này thuộc QA-02 và chỉ tự động hóa những hành vi đã tồn tại: FE-01 application shell, route placeholder và trang 404. Các luồng catalog, auth, cart, checkout, admin, seed và RAG vẫn là test case planned trong traceability matrix; chưa có test giả đánh dấu pass.
+Thư mục này chứa smoke test cho application shell và acceptance E2E của MVP catalog/chat RAG. Auth, cart, checkout, order, admin và support nằm ngoài release gate MVP hiện hành.
 
 ## Cấu trúc
 
@@ -19,7 +19,13 @@ npm ci
 npm run build
 cd ../qa
 npm ci
+node node_modules/typescript/lib/tsc.js -p tsconfig.json --noEmit
 npm run test:smoke
+
+# Khi stack Compose đã chạy, migrate, seed và reindex xong:
+QA_BASE_URL=http://127.0.0.1:5176 \
+QA_API_BASE_URL=http://127.0.0.1:8000/api/v1 \
+npm run test:mvp
 ```
 
 Cấu hình mặc định dùng Google Chrome cài trên máy (`channel: chrome`). Nếu môi trường CI không có Chrome, chạy `npm run install:browsers` và đổi project sang Chromium bundled trong cấu hình CI tương ứng.
@@ -31,11 +37,11 @@ cd qa
 QA_BASE_URL=http://127.0.0.1:5176 npm run test:smoke
 ```
 
-## Biến môi trường dành cho integration sau này
+## Biến môi trường integration
 
 - `QA_API_BASE_URL`: mặc định `http://127.0.0.1:8000/api/v1`.
 - `QA_ALLOW_DB_RESET=true`: khóa an toàn bắt buộc trước khi reset DB.
-- `QA_DATABASE_RESET_COMMAND`: JSON argv array cho reset database test do backend bàn giao, ví dụ `["docker","compose","down","--volumes"]`.
-- `QA_DATABASE_SEED_COMMAND`: JSON argv array cho seed deterministic do backend bàn giao.
+- `QA_DATABASE_RESET_COMMAND`: JSON argv array cho reset database test, ví dụ `["docker","compose","down","--volumes"]`.
+- `QA_DATABASE_SEED_COMMAND`: JSON argv array cho seed deterministic.
 
-Không đặt command reset/seed mặc định ở QA-02 vì BE-06 chưa tồn tại. Helper phải fail rõ thay vì giả vờ seed thành công.
+Các helper destructive vẫn fail-closed: cần opt-in rõ, database test và command hợp lệ; suite E2E MVP không tự reset database đang chạy.

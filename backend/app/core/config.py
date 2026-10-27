@@ -20,8 +20,12 @@ class Settings(BaseSettings):
     auth_rate_limit_window_seconds: int = Field(default=60, gt=0)
     auth_rate_limit_max_keys: int = Field(default=10_000, gt=0)
     forgot_response_floor_ms: int = Field(default=250, ge=0)
+    chat_rate_limit_requests: int = Field(default=30, gt=0)
+    chat_rate_limit_window_seconds: int = Field(default=60, gt=0)
     rag_embedding_provider: Literal["stub", "gemini"] = "stub"
+    rag_chat_provider: Literal["stub", "gemini"] = "stub"
     gemini_api_key: SecretStr | None = None
+    gemini_model: str | None = None
     gemini_embedding_model: str | None = None
     embedding_dimension: int = Field(default=768, gt=0)
     rag_worker_lock_timeout_seconds: int = Field(default=300, gt=0)
@@ -54,6 +58,16 @@ class Settings(BaseSettings):
             raise ValueError(
                 "GEMINI_API_KEY and GEMINI_EMBEDDING_MODEL are required "
                 "when RAG_EMBEDDING_PROVIDER=gemini"
+            )
+        if self.rag_chat_provider == "gemini" and (
+            self.gemini_api_key is None
+            or not self.gemini_api_key.get_secret_value()
+            or not self.gemini_model
+            or not self.gemini_model.strip()
+        ):
+            raise ValueError(
+                "GEMINI_API_KEY and GEMINI_MODEL are required "
+                "when RAG_CHAT_PROVIDER=gemini"
             )
         if self.rag_worker_retry_max_seconds < self.rag_worker_retry_base_seconds:
             raise ValueError(

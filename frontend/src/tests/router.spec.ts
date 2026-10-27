@@ -54,4 +54,12 @@ describe('application router', () => {
 
     expect(router.resolve('/khong-ton-tai').name).toBe('not-found')
   })
+
+  it('routes product slugs to the product detail page', () => {
+    const router = createAppRouter(createMemoryHistory())
+    const resolved = router.resolve('/san-pham/ao-thun-basic')
+
+    expect(resolved.name).toBe('product-detail')
+    expect(typeof resolved.matched[0]?.components?.default).toBe('function')
+  })
 })

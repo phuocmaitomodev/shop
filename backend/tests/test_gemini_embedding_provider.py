@@ -91,6 +91,34 @@ def test_gemini_provider_rejects_dimension_mismatch() -> None:
     asyncio.run(exercise())
 
 
+def test_gemini_provider_supports_retrieval_query_task_type() -> None:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(
+            200, json={"embeddings": [{"values": [1.0] + [0.0] * 767}]}
+        )
+
+    async def exercise() -> None:
+        async with httpx.AsyncClient(
+            transport=httpx.MockTransport(handler)
+        ) as client:
+            provider = GeminiEmbeddingProvider(
+                api_key="test-key",
+                model_name="configured-model",
+                dimension=768,
+                task_type="RETRIEVAL_QUERY",
+                client=client,
+            )
+            await provider.embed(["áo thun"])
+
+    asyncio.run(exercise())
+
+    payload = json.loads(requests[0].content)
+    assert payload["requests"][0]["taskType"] == "RETRIEVAL_QUERY"
+
+
 @pytest.mark.parametrize("status_code", [429, 500, 503])
 def test_gemini_provider_maps_transient_http_errors_to_retryable(
     status_code: int,

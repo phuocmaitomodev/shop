@@ -1,7 +1,9 @@
 import { mount } from '@vue/test-utils'
 import { createPinia } from 'pinia'
 import { createMemoryHistory } from 'vue-router'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
+
+vi.mock('../services/chat', () => ({ sendChatMessage: vi.fn() }))
 
 import App from '../App.vue'
 import { createAppRouter } from '../router'
@@ -27,6 +29,9 @@ describe('application shell', () => {
     expect(wrapper.get('main#main-content').text()).toContain('Khám phá phong cách')
     expect(wrapper.get('footer').text()).toContain('Dữ liệu cửa hàng mẫu')
     expect(wrapper.get('[data-testid="chat-widget-position"]')).toBeTruthy()
+    expect(wrapper.get('[data-testid="chat-toggle"]').attributes('aria-expanded')).toBe('false')
+    await wrapper.get('[data-testid="chat-toggle"]').trigger('click')
+    expect(wrapper.get('[role="dialog"]').text()).toContain('Trợ lý sản phẩm')
   })
 
   it('provides valid destinations for every shell navigation link', async () => {

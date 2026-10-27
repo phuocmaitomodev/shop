@@ -8,16 +8,20 @@ From the repository root, create the untracked runtime environment file:
 cp .env.example .env
 ```
 
-Replace the placeholder application and database secrets before sharing the environment. Keep `RAG_EMBEDDING_PROVIDER=stub` for deterministic offline development, or configure the Gemini values described below.
+Replace the placeholder application and database secrets before sharing the environment. Keep `RAG_EMBEDDING_PROVIDER=stub` and `RAG_CHAT_PROVIDER=stub` for deterministic offline development, or configure the Gemini values described below.
 When changing the PostgreSQL password, update the URL-encoded password in `DATABASE_URL` to match it.
 
 ## Run API and PostgreSQL
 
 ```bash
-docker compose up --build -d
+docker compose up -d db
+docker compose run --rm api alembic upgrade head
+docker compose up --build -d api rag-worker frontend
 docker compose ps
-docker compose exec api alembic upgrade head
 ```
+
+Không khởi động `rag-worker` trước migration: worker cần các bảng outbox/chunk và
+sẽ retry với log lỗi khi schema chưa tồn tại.
 
 Endpoints:
 
@@ -141,6 +145,17 @@ To remove the local database volume and start clean:
 docker compose down --volumes
 ```
 
+## Product chat API
+
+`POST /api/v1/chat` nhận `message` và tối đa 6 lượt `history`, không lưu transcript.
+Response trả `answer`, product cards SQL-hydrated, source IDs đã allow-list và một
+trong các status `ok`, `insufficient_data`, `out_of_scope`,
+`provider_unavailable`. Stub deterministic là mặc định. Để dùng Gemini cho
+structured planning/selection, đặt `RAG_CHAT_PROVIDER=gemini`, `GEMINI_API_KEY`
+và `GEMINI_MODEL`; dynamic price/stock vẫn luôn được render từ PostgreSQL.
+API giới hạn theo IP với `CHAT_RATE_LIMIT_REQUESTS` trong cửa sổ
+`CHAT_RATE_LIMIT_WINDOW_SECONDS` để bảo vệ provider công khai.
+
 ## RAG index worker
 
 `rag-worker` chạy `python -m app.rag.run_worker` và mặc định dùng provider
@@ -197,3 +212,17 @@ ORDER BY created_at, id;
 iteration kế tiếp. Job `failed` là terminal; sau khi sửa nguyên nhân, thao tác
 reindex phải tạo source version/job mới thay vì sửa hoặc hồi sinh job cũ. Worker
 xử lý `SIGTERM`/`SIGINT`, dừng sau iteration hiện tại và xóa readiness marker.
+
+## Product retrieval and live hydration
+
+`app.rag.retrieval.retrieve_products` nhận vector truy vấn 768 chiều, hard filters
+`category`, `min_price`, `max_price`, `color`, `size` và limit tối đa 20. Candidate
+chỉ đến từ product document đang active/indexed cùng active chunk đúng
+`source_version`; ranking và limit được áp dụng theo product để nhiều chunk của một
+product không lấn át product khác. Category, effective price và một biến thể còn
+hàng thỏa đồng thời color/size đều được lọc bằng SQL.
+
+Sau semantic selection, hàm revalidate document/chunk và hydrate name, slug, ảnh,
+effective price, màu, size và stock từ catalog PostgreSQL trong một câu SQL cuối.
+Kết quả chỉ expose product/source/chunk IDs thuộc retrieval set đã xác thực; dữ liệu
+động trong embedding hoặc chunk content không được dùng làm nguồn trả lời.

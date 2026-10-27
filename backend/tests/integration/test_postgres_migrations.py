@@ -10,6 +10,8 @@ from alembic.script import ScriptDirectory
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import create_async_engine
 
+from tests.integration.database_guard import mark_fresh_migrated_database
+
 
 MIGRATION_DATABASE_URL = os.getenv("MIGRATION_DATABASE_URL")
 pytestmark = pytest.mark.skipif(
@@ -95,3 +97,4 @@ def test_upgrade_head_on_fresh_postgresql_with_pgvector() -> None:
     assert expected_tables <= tables_after
     assert "vector" in extensions_after
     assert revisions_after == {expected_head}
+    mark_fresh_migrated_database(MIGRATION_DATABASE_URL)
