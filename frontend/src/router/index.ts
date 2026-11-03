@@ -6,6 +6,7 @@ import {
 } from 'vue-router'
 
 import HomePage from '../pages/HomePage.vue'
+import CommerceRouteShell from '../pages/CommerceRouteShell.vue'
 import NotFoundPage from '../pages/NotFoundPage.vue'
 import PlaceholderPage from '../pages/PlaceholderPage.vue'
 
@@ -14,6 +15,24 @@ const placeholder = (path: string, name: string, title: string, description: str
   name,
   component: PlaceholderPage,
   meta: { title, description },
+})
+
+const commerceShell = (
+  path: string,
+  name: string,
+  title: string,
+  description: string,
+  simulationNotice?: string,
+): RouteRecordRaw => ({
+  path,
+  name,
+  component: CommerceRouteShell,
+  meta: {
+    title,
+    description,
+    simulationNotice,
+    emptyMessage: 'Chưa kết nối API nghiệp vụ; không có mutation nào được gửi từ màn hình khung.',
+  },
 })
 
 export const routes: RouteRecordRaw[] = [
@@ -31,9 +50,24 @@ export const routes: RouteRecordRaw[] = [
     component: () => import('../pages/ProductDetailPage.vue'),
     meta: { title: 'Chi tiết sản phẩm' },
   },
-  placeholder('/gio-hang', 'cart', 'Giỏ hàng', 'Quản lý sản phẩm và số lượng trong giỏ hàng sẽ được triển khai ở FE-04.'),
-  placeholder('/thanh-toan', 'checkout', 'Thanh toán', 'Quy trình đặt hàng sáu bước sẽ được triển khai ở FE-05.'),
-  placeholder('/dat-hang-thanh-cong', 'order-success', 'Đặt hàng thành công', 'Trang xác nhận và mã đơn hàng sẽ được triển khai ở FE-05.'),
+  commerceShell('/gio-hang', 'cart', 'Giỏ hàng', 'Màn hình khung cho giỏ hàng theo owner từ cookie HttpOnly.'),
+  commerceShell('/thanh-toan', 'checkout', 'Thanh toán', 'Màn hình khung xác nhận đơn; giá và tồn kho phải được server kiểm tra lại.'),
+  commerceShell('/dat-hang-thanh-cong', 'order-success', 'Đặt hàng thành công', 'Màn hình khung hiển thị mã đơn và kết quả do API trả về.'),
+  commerceShell('/tra-cuu-don-hang', 'order-lookup', 'Tra cứu đơn hàng', 'Khách tra cứu bằng mã đơn và token bí mật gửi trong header, không đặt token trong URL.'),
+  commerceShell(
+    '/don-hang/:orderCode/thanh-toan-demo',
+    'payment-demo',
+    'Trạng thái thanh toán demo',
+    'Hiển thị trạng thái payment provider=demo và số tiền VND do server trả về.',
+    'Không gọi cổng thanh toán hoặc phát sinh giao dịch thật.',
+  ),
+  commerceShell(
+    '/don-hang/:orderCode/hoan-tien-demo',
+    'refund-demo',
+    'Yêu cầu hoàn tiền mô phỏng',
+    'Màn hình khung cho trạng thái và yêu cầu hoàn tiền demo có xác nhận.',
+    'Không có giao dịch hoàn tiền thật hoặc kết nối ngân hàng.',
+  ),
   placeholder('/dang-nhap', 'login', 'Đăng nhập', 'Đăng nhập bằng email và mật khẩu sẽ được triển khai ở FE-02.'),
   placeholder('/dang-ky', 'register', 'Đăng ký', 'Tạo tài khoản khách hàng sẽ được triển khai ở FE-02.'),
   placeholder('/quen-mat-khau', 'forgot-password', 'Quên mật khẩu', 'Luồng đặt lại mật khẩu demo sẽ được triển khai ở FE-02.'),

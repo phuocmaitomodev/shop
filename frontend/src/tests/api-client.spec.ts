@@ -24,6 +24,7 @@ describe('api client', () => {
 
     const [, request] = fetchMock.mock.calls[0] as [string, RequestInit]
     const headers = new Headers(request.headers)
+    expect(request.credentials).toBe('include')
     expect(headers.get('Accept')).toBe('application/json')
     expect(headers.get('X-Request-Source')).toBe('admin')
     expect(headers.has('Content-Type')).toBe(false)
