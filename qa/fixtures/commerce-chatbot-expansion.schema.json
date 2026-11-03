@@ -1,0 +1,116 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "commerce-chatbot-expansion.schema.json",
+  "title": "Corpus oracle cho commerce chatbot mở rộng",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "locale", "source_documents", "test_data", "risk_register", "traceability", "intent_groups", "cases"],
+  "properties": {
+    "schema_version": {"type": "string", "const": "1.0.0"},
+    "locale": {"type": "string", "const": "vi"},
+    "source_documents": {
+      "type": "array", "minItems": 7, "uniqueItems": true,
+      "items": {"type": "string", "minLength": 1}
+    },
+    "test_data": {
+      "type": "object", "additionalProperties": false,
+      "required": ["dataset", "identities", "resources", "invariants"],
+      "properties": {
+        "dataset": {"type": "string", "const": "EXP_QA_BASE_V1"},
+        "identities": {"type": "array", "minItems": 4, "uniqueItems": true, "items": {"type": "string", "minLength": 1}},
+        "resources": {"type": "array", "minItems": 6, "uniqueItems": true, "items": {"type": "string", "minLength": 1}},
+        "invariants": {"type": "array", "minItems": 5, "uniqueItems": true, "items": {"type": "string", "minLength": 1}}
+      }
+    },
+    "risk_register": {
+      "type": "array", "minItems": 8,
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["id", "risk", "priority", "controls", "owner"],
+        "properties": {
+          "id": {"type": "string", "pattern": "^EXP-RK-[0-9]{2}$"},
+          "risk": {"type": "string", "minLength": 1},
+          "priority": {"type": "string", "enum": ["P0", "P1"]},
+          "controls": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}},
+          "owner": {"type": "string", "minLength": 1}
+        }
+      }
+    },
+    "traceability": {
+      "type": "array", "minItems": 10,
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["acceptance_id", "owner", "test_layers", "fixture_ids", "expected_results", "status"],
+        "properties": {
+          "acceptance_id": {"type": "string", "pattern": "^EXP-CONTRACT-(0[1-9]|10)$"},
+          "owner": {"type": "string", "minLength": 1},
+          "test_layers": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string", "enum": ["unit", "integration", "api", "e2e", "responsive", "rag_eval", "review"]}},
+          "fixture_ids": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string", "pattern": "^EXP-[A-Z]+-[0-9]{3}$"}},
+          "expected_results": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}},
+          "status": {"type": "string", "const": "planned"}
+        }
+      }
+    },
+    "intent_groups": {
+      "type": "array", "minItems": 8, "maxItems": 8,
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["id", "name", "intents", "case_ids"],
+        "properties": {
+          "id": {"type": "string", "pattern": "^EXP-GROUP-0[1-8]$"},
+          "name": {"type": "string", "minLength": 1},
+          "intents": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string", "minLength": 1}},
+          "case_ids": {"type": "array", "minItems": 3, "uniqueItems": true, "items": {"type": "string", "pattern": "^EXP-[A-Z]+-[0-9]{3}$"}}
+        }
+      }
+    },
+    "cases": {
+      "type": "array", "minItems": 24,
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["id", "group_id", "case_kind", "acceptance_ids", "owner", "test_layers", "execution_status", "tags", "utterance_form", "message", "history", "identity", "setup", "expected_intent", "operation_class", "request", "oracle"],
+        "properties": {
+          "id": {"type": "string", "pattern": "^EXP-[A-Z]+-[0-9]{3}$"},
+          "group_id": {"type": "string", "pattern": "^EXP-GROUP-0[1-8]$"},
+          "case_kind": {"type": "string", "enum": ["chat", "api", "service"]},
+          "acceptance_ids": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string", "pattern": "^EXP-CONTRACT-(0[1-9]|10)$"}},
+          "owner": {"type": "string", "minLength": 1},
+          "test_layers": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string", "enum": ["unit", "integration", "api", "e2e", "responsive", "rag_eval", "review"]}},
+          "execution_status": {"type": "string", "const": "planned"},
+          "tags": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string", "minLength": 1}},
+          "utterance_form": {"type": "string", "enum": ["direct", "paraphrase", "follow_up"]},
+          "message": {"type": "string", "minLength": 1},
+          "history": {"type": "array", "items": {"type": "string", "minLength": 1}},
+          "identity": {"type": "string", "minLength": 1},
+          "setup": {"type": "string", "minLength": 1},
+          "expected_intent": {"type": ["string", "null"], "enum": [null, "policy_question", "product_search", "product_compare", "cart_read", "cart_add", "cart_update", "cart_remove", "order_create", "order_cancel", "order_lookup", "payment_demo_status", "refund_status", "refund_request", "greeting", "out_of_scope", "prompt_injection"]},
+          "operation_class": {"type": "string", "enum": ["read_only", "proposal", "mutation"]},
+          "request": {
+            "type": "object", "additionalProperties": false,
+            "required": ["method", "path", "headers", "body_fields"],
+            "properties": {
+              "method": {"type": "string", "enum": ["GET", "POST", "PATCH", "DELETE"]},
+              "path": {"type": "string", "minLength": 1},
+              "headers": {"type": "array", "uniqueItems": true, "items": {"type": "string", "minLength": 1}},
+              "body_fields": {"type": "array", "uniqueItems": true, "items": {"type": "string", "minLength": 1}}
+            }
+          },
+          "oracle": {
+            "type": "object", "additionalProperties": false,
+            "required": ["http_status", "error_code", "action", "side_effect", "external_calls", "model_output_is_oracle", "source_of_truth", "expected"],
+            "properties": {
+              "http_status": {"type": "integer", "minimum": 100, "maximum": 599},
+              "error_code": {"type": ["string", "null"]},
+              "action": {"type": "string", "minLength": 1},
+              "side_effect": {"type": "string", "enum": ["none", "proposal_created", "mutation_committed"]},
+              "external_calls": {"type": "integer", "minimum": 0},
+              "model_output_is_oracle": {"type": "boolean", "const": false},
+              "source_of_truth": {"type": "string", "minLength": 1},
+              "expected": {"type": "string", "minLength": 1}
+            }
+          }
+        }
+      }
+    }
+  }
+}

@@ -1,5 +1,12 @@
 # QA-01 — Traceability matrix
 
+> **Gate mở rộng hiện hành:** Traceability `EXP-CONTRACT-01..10`, risk/test-data
+> plan và corpus tám nhóm được khóa tại
+> [`commerce-chatbot-expansion-test-plan.md`](commerce-chatbot-expansion-test-plan.md)
+> và `qa/fixtures/commerce-chatbot-expansion.json`. Yêu cầu trực tiếp 2026-11-03
+> ghi đè trạng thái MVP lịch sử bên dưới ở phần xung đột. Các case EXP hiện là
+> `Planned`, không được suy ra PASS từ validator tĩnh.
+
 ## 1. Quy ước
 
 - Nguồn sự thật: `request.md`, sau đó là `docs/api-contract.md`, `docs/database-schema.md`, `docs/architecture.md`, `docs/rag-design.md` và `docs/acceptance-test.md`.

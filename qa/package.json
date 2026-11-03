@@ -10,6 +10,7 @@
     "test:mvp": "playwright test --grep @mvp --project=chromium-desktop --project=chromium-mobile",
     "test:return-policy": "playwright test --grep @return-policy --project=chromium-desktop --project=chromium-mobile",
     "test:return-policy:corpus": "node scripts/return-policy-corpus.mjs",
+    "test:commerce-contract": "node scripts/validate-commerce-expansion.mjs",
     "install:browsers": "playwright install chromium"
   },
   "devDependencies": {

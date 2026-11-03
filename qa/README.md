@@ -1,6 +1,8 @@
 # QA automation foundation
 
-Thư mục này chứa smoke test cho application shell và acceptance E2E của MVP catalog/chat RAG. Auth, cart, checkout, order, admin và support nằm ngoài release gate MVP hiện hành.
+Thư mục này chứa smoke test cho application shell, acceptance E2E catalog/chat RAG
+và corpus contract cho commerce chatbot mở rộng. Yêu cầu trực tiếp ngày 2026-11-03
+ghi đè release gate MVP cũ ở phần auth/cart/order/payment/refund và tám nhóm chat.
 
 ## Cấu trúc
 
@@ -32,12 +34,21 @@ npm run test:return-policy
 
 # Toàn bộ case canonical_current trong corpus policy (chạy một lần qua API)
 npm run test:return-policy:corpus
+
+# Validate schema, traceability, oracle và link của corpus commerce mở rộng
+npm run test:commerce-contract
 ```
 
 `test:return-policy:corpus` đọc trực tiếp
 `fixtures/return-policy-questions.json` và fail khi direct, paraphrase,
 follow-up, multi-fact, boundary hoặc prompt-injection regression thiếu fact/citation.
 Script dùng `QA_API_BASE_URL`; không chạy lặp theo browser project.
+
+`test:commerce-contract` không gọi Gemini hoặc product API. Script validate tĩnh
+`fixtures/commerce-chatbot-expansion.json` theo schema, kiểm đủ
+`EXP-CONTRACT-01..10`, tám nhóm direct/paraphrase/follow-up và các oracle P0.
+Case trong corpus hiện là `planned` cho tới khi implementation tương ứng tồn tại;
+validator pass không có nghĩa behavior sản phẩm đã PASS.
 
 Cấu hình mặc định dùng Google Chrome cài trên máy (`channel: chrome`). Nếu môi trường CI không có Chrome, chạy `npm run install:browsers` và đổi project sang Chromium bundled trong cấu hình CI tương ứng.
 
