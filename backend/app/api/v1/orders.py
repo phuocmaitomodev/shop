@@ -212,7 +212,7 @@ async def _owned_order(
             Order.order_code == order_code, Order.user_id == owner.user_id
         )
         if lock:
-            statement = statement.with_for_update()
+            statement = statement.with_for_update(of=Order)
         result = await session.execute(statement.options(joinedload(Order.items)))
         return result.unique().scalar_one_or_none()
     if owner.guest_token is None:
@@ -224,7 +224,7 @@ async def _owned_order(
         .where(Order.order_code == order_code, Order.user_id.is_(None))
     )
     if lock:
-        statement = statement.with_for_update()
+        statement = statement.with_for_update(of=Order)
     result = await session.execute(statement.options(joinedload(Order.items)))
     row = result.unique().one_or_none()
     if row is None:
