@@ -1,6 +1,9 @@
 # Acceptance test plan
 
-> **Acceptance gate MVP hiện hành:** Các gate `MVP-*` và vertical slice `RET-RAG-*` trong [`mvp-product-rag-scope.md`](mvp-product-rag-scope.md) quyết định release bản thu gọn. Các test CAT/ADM/RAG/SEC cũ dưới đây được giữ để truy vết yêu cầu gốc và chỉ áp dụng khi nằm trong mapping MVP; hạng mục auth, cart, checkout, order, admin và support không còn là blocker.
+> **Acceptance gate hiện hành:** Yêu cầu trực tiếp ngày 2026-11-03 mở lại
+> commerce và tám nhóm chatbot. `EXP-CONTRACT-01..10` trong
+> [`commerce-chatbot-expansion-contract.md`](commerce-chatbot-expansion-contract.md)
+> là P0; các gate MVP/RET vẫn áp dụng cho phần catalog/policy không xung đột.
 
 ## 1. Mục đích
 
@@ -154,3 +157,15 @@ Kiểm tra ít nhất: header/menu/search, listing/filter, product variant CTA, 
 - P1 failures có owner, mức ảnh hưởng và quyết định rõ.
 - Không còn blocker/critical; không có secret thật.
 - Báo cáo đính kèm test run, screenshots/logs cần thiết, DB product count và danh sách deviation (nếu có).
+
+## 12. Gate mở rộng commerce/chatbot
+
+- Mỗi nhóm intent có positive, negative, ownership, retry và injection case.
+- Cart/order/payment/refund chạy trên PostgreSQL sạch; test race/idempotency và
+  chứng minh stock không double reserve/restore.
+- User, guest và admin boundary được test bằng đổi resource ID/token; guest lookup
+  cần order code + header token.
+- Chat mutation phải qua proposal/confirmation một lần; expired/replayed/wrong
+  owner/changed payload đều fail closed và không có side effect.
+- UI/E2E ghi rõ COD/online/refund là mô phỏng, tiếng Việt/VND, responsive và
+  không có request tới payment/refund provider bên ngoài.

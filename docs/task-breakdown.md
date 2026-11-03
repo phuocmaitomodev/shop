@@ -1,6 +1,10 @@
 # Task breakdown và dependency
 
-> **Kế hoạch thực thi hiện hành:** Kanban theo critical path `MVP-01..07` và vertical slice `RET-*` có giới hạn trong [`mvp-product-rag-scope.md`](mvp-product-rag-scope.md). `RET-*` chỉ bổ sung một source `return_policy` qua endpoint chat hiện hành; không khôi phục roadmap knowledge/admin/support tổng quát. Các task BE/FE/RAG/QA đầy đủ bên dưới là backlog lịch sử; task ngoài catalog công khai, product detail tối giản, chat RAG sản phẩm và slice `return_policy` phải archive khỏi board MVP.
+> **Kế hoạch hiện hành:** Yêu cầu trực tiếp ngày 2026-11-03 mở rộng commerce
+> và chatbot tám nhóm. Graph `EXP-*` trên board `shop` và contract
+> [`commerce-chatbot-expansion-contract.md`](commerce-chatbot-expansion-contract.md)
+> ghi đè kế hoạch MVP/RET ở phần xung đột. Artifact lịch sử chỉ được tái sử dụng
+> sau review diff/test; không cherry-pick mù hoặc đụng worktree dirty.
 
 ## 1. Mục tiêu điều phối
 
@@ -219,3 +223,13 @@ source fields `source_type`, `source_id`, `rag_document_id`, `chunk_ids`, nullab
 `product_id`, nullable `knowledge_type`, `title`, cùng policy canonical ở
 `mvp-product-rag-scope.md`. Breaking change ngoài tập này phải quay lại RET-00; worker
 không tự đổi schema/API rồi yêu cầu consumer thích nghi.
+
+## 13. Graph mở rộng `EXP-*`
+
+Contract gate `EXP-00` hoàn thành trước mọi implementation. Wave foundation gồm
+backend schema/ownership và QA oracle; commerce API và RAG intent/tooling chỉ
+chạy sau foundation tương ứng. Frontend consumer chạy sau OpenAPI commerce;
+QA E2E phụ thuộc backend, RAG và frontend. Card integration/release do
+`shop-orchestrator` sở hữu phụ thuộc tất cả card implementation/QA, review full
+SHA, dựng canonical local integration, clean-room test và chỉ chuẩn bị handoff;
+không push/merge. Dependency cụ thể và task ID là nguồn thật trên board `shop`.

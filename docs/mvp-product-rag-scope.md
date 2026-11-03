@@ -1,5 +1,11 @@
 # Phạm vi MVP catalog, chat RAG sản phẩm và chính sách đổi trả
 
+> **Đã bị thay thế một phần:** Yêu cầu trực tiếp ngày 2026-11-03 mở lại
+> commerce và mở rộng chatbot thành tám nhóm nghiệp vụ. Trong mọi phần xung
+> đột, [`commerce-chatbot-expansion-contract.md`](commerce-chatbot-expansion-contract.md)
+> có ưu tiên cao hơn addendum MVP này. Các quyết định grounding của catalog và
+> `return_policy` vẫn được giữ khi không xung đột.
+
 ## 1. Quyết định phạm vi
 
 Theo quyết định trực tiếp của người dùng ngày 2026-10-26, bản demo được thu gọn thành catalog và chat RAG sản phẩm. Vertical slice `return_policy` dưới đây là phần mở rộng có giới hạn của chính endpoint chat hiện hành, không khôi phục roadmap thương mại điện tử hoặc knowledge RAG tổng quát:
