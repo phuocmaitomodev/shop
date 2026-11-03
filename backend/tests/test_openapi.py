@@ -157,6 +157,47 @@ def test_openapi_contains_cart_coupon_contract(client: TestClient) -> None:
     ]
 
 
+def test_openapi_contains_order_payment_refund_contract(client: TestClient) -> None:
+    schema = client.get("/openapi.json").json()
+    paths = schema["paths"]
+    expected = {
+        "/api/v1/action-confirmations": {"post"},
+        "/api/v1/orders": {"post"},
+        "/api/v1/orders/lookup": {"get"},
+        "/api/v1/orders/{order_code}": {"get"},
+        "/api/v1/orders/{order_code}/cancel": {"post"},
+        "/api/v1/orders/{order_code}/payment": {"get"},
+        "/api/v1/orders/{order_code}/refund-requests": {"post"},
+        "/api/v1/orders/{order_code}/refund-requests/latest": {"get"},
+    }
+    for path, methods in expected.items():
+        assert path in paths
+        assert methods <= set(paths[path])
+
+    for path in (
+        "/api/v1/orders",
+        "/api/v1/orders/{order_code}/cancel",
+        "/api/v1/orders/{order_code}/refund-requests",
+    ):
+        operation = paths[path]["post"]
+        headers = {
+            parameter["name"]: parameter
+            for parameter in operation["parameters"]
+            if parameter["in"] == "header"
+        }
+        assert headers["Idempotency-Key"]["required"] is True
+        assert operation["responses"]["409"]["content"]["application/json"][
+            "schema"
+        ]["$ref"] == "#/components/schemas/ErrorEnvelope"
+
+    payment_schema = schema["components"]["schemas"]["PaymentResponse"]
+    assert payment_schema["properties"]["provider"]["const"] == "demo"
+    assert payment_schema["properties"]["is_simulation"]["const"] is True
+    assert "amount" not in schema["components"]["schemas"]["RefundCreateRequest"][
+        "properties"
+    ]
+
+
 def test_openapi_contains_admin_knowledge_and_index_status_contract(
     client: TestClient,
 ) -> None:

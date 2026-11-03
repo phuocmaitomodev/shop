@@ -19,6 +19,7 @@ def create_app() -> FastAPI:
     application = FastAPI(title=settings.app_name)
     application.state.auth_rate_limiter = InMemoryRateLimiter()
     application.state.chat_rate_limiter = InMemoryRateLimiter()
+    application.state.commerce_rate_limiter = InMemoryRateLimiter()
     application.add_middleware(ChatBodyLimitMiddleware)
     application.add_middleware(RequestContextMiddleware)
     application.add_middleware(

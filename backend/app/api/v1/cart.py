@@ -219,6 +219,7 @@ async def _load_sellable_variant(
             contains_eager(ProductVariant.color),
             contains_eager(ProductVariant.size),
         )
+        .execution_options(populate_existing=True)
         .with_for_update()
     )
     if variant is None:

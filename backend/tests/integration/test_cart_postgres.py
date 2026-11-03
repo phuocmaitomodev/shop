@@ -5,14 +5,16 @@ from uuid import UUID, uuid4
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.pool import NullPool
 
 from app.core.security import hash_password
+from app.db.session import get_db_session
 from app.main import create_app
 from app.models.auth import User
 from app.models.catalog import Category, Color, Product, ProductVariant, Size
-from app.models.commerce import Coupon, CouponRedemption, Order
+from app.models.commerce import Coupon, CouponRedemption, InventoryMovement, Order
 from tests.integration.database_guard import require_fresh_migrated_database
 
 MIGRATION_DATABASE_URL = os.getenv("MIGRATION_DATABASE_URL")
@@ -222,3 +224,116 @@ def test_postgres_cart_ownership_concurrency_live_data_and_coupon_boundaries() -
         )
         assert unavailable.status_code == 404
         assert unavailable.json()["error"]["code"] == "VARIANT_NOT_AVAILABLE"
+
+
+def test_postgres_concurrent_checkout_reserves_last_item_once() -> None:
+    assert MIGRATION_DATABASE_URL is not None
+    require_fresh_migrated_database(MIGRATION_DATABASE_URL)
+
+    async def seed() -> str:
+        engine = create_async_engine(MIGRATION_DATABASE_URL)
+        session_factory = async_sessionmaker(engine, expire_on_commit=False)
+        suffix = uuid4().hex
+        async with session_factory() as session:
+            category = Category(name="Checkout PG", slug=f"checkout-pg-{suffix}")
+            color = Color(name="Xanh PG", slug=f"checkout-blue-{suffix}")
+            size = Size(code=f"CO-{suffix[:8]}", name="Checkout")
+            product = Product(
+                category=category,
+                sku=f"CHECKOUT-PG-{suffix}",
+                slug=f"checkout-pg-product-{suffix}",
+                name="Sản phẩm checkout PostgreSQL",
+                price=250_000,
+            )
+            variant = ProductVariant(
+                product=product,
+                color=color,
+                size=size,
+                variant_sku=f"CHECKOUT-PG-VARIANT-{suffix}",
+                stock_quantity=1,
+            )
+            session.add_all([category, color, size, product, variant])
+            await session.commit()
+            variant_id = str(variant.id)
+        await engine.dispose()
+        return variant_id
+
+    variant_id = asyncio.run(seed())
+    application = create_app()
+    api_engine = create_async_engine(MIGRATION_DATABASE_URL, poolclass=NullPool)
+    api_session_factory = async_sessionmaker(api_engine, expire_on_commit=False)
+
+    async def override_session():
+        async with api_session_factory() as session:
+            yield session
+
+    application.dependency_overrides[get_db_session] = override_session
+
+    def prepare(client: TestClient, key_suffix: str) -> tuple[dict, dict]:
+        cart = client.post(
+            "/api/v1/cart/items", json={"variant_id": variant_id, "quantity": 1}
+        ).json()["data"]
+        payload = {
+            "cart_id": cart["cart_id"],
+            "cart_version": cart["version"],
+            "recipient_name": f"Khách {key_suffix}",
+            "phone": "0901234567",
+            "address_line": "1 Đường PostgreSQL",
+            "province": "TP. Hồ Chí Minh",
+            "payment_method": "cod",
+        }
+        confirmation = client.post(
+            "/api/v1/action-confirmations",
+            json={
+                "action": "order_create",
+                "resource_key": cart["cart_id"],
+                "payload": payload,
+            },
+        )
+        assert confirmation.status_code == 201, confirmation.text
+        payload["confirmation_token"] = confirmation.json()["data"][
+            "confirmation_token"
+        ]
+        return payload, {"Idempotency-Key": f"checkout-race-{key_suffix}"}
+
+    with TestClient(application) as first, TestClient(application) as second:
+        first_request = prepare(first, "first")
+        second_request = prepare(second, "second")
+
+        def checkout(args: tuple[TestClient, tuple[dict, dict]]) -> tuple[int, str | None]:
+            client, (payload, headers) = args
+            response = client.post("/api/v1/orders", json=payload, headers=headers)
+            return response.status_code, response.json().get("error", {}).get("code")
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            outcomes = list(
+                executor.map(
+                    checkout,
+                    ((first, first_request), (second, second_request)),
+                )
+            )
+
+    assert sorted(status_code for status_code, _ in outcomes) == [201, 409], outcomes
+    assert {code for _, code in outcomes if code} == {"OUT_OF_STOCK"}
+
+    async def persisted_state() -> tuple[int, int]:
+        engine = create_async_engine(MIGRATION_DATABASE_URL)
+        session_factory = async_sessionmaker(engine, expire_on_commit=False)
+        async with session_factory() as session:
+            stock = await session.scalar(
+                select(ProductVariant.stock_quantity).where(
+                    ProductVariant.id == UUID(variant_id)
+                )
+            )
+            reserves = await session.scalar(
+                select(func.count()).select_from(InventoryMovement).where(
+                    InventoryMovement.variant_id == UUID(variant_id),
+                    InventoryMovement.movement_type == "order_reserve",
+                )
+            )
+        await engine.dispose()
+        return int(stock or 0), int(reserves or 0)
+
+    assert asyncio.run(persisted_state()) == (0, 1)
+    application.dependency_overrides.clear()
+    asyncio.run(api_engine.dispose())

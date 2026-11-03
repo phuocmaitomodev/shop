@@ -86,6 +86,23 @@ returns integer VND. `PATCH`/`DELETE` and coupon mutations require the latest
 `SHIPPING_FLAT_FEE` and `FREE_SHIPPING_THRESHOLD`. Cart stock checks do not reserve
 inventory; checkout remains responsible for locking and revalidating stock.
 
+### Order, payment and refund demo API
+
+`POST /api/v1/orders` khóa giỏ hàng/variant, tính lại giá, tồn kho, coupon và
+phí giao hàng từ PostgreSQL rồi lưu snapshot đơn hàng và trừ tồn trong cùng
+transaction. Tạo đơn, hủy đơn và tạo yêu cầu hoàn tiền đều cần
+`Idempotency-Key` cùng confirmation token một lần (TTL tối đa 5 phút). Guest
+nhận lookup token đúng một lần; database chỉ lưu SHA-256 hash và các lần đọc
+sau gửi token qua `X-Order-Lookup-Token`, không đặt token vào URL.
+
+Các endpoint gồm `GET /orders/{order_code}`, `GET /orders/lookup`,
+`POST /orders/{order_code}/cancel`, `GET /orders/{order_code}/payment`,
+`POST /orders/{order_code}/refund-requests` và
+`GET /orders/{order_code}/refund-requests/latest`. Hủy chỉ hợp lệ ở
+`pending_confirmation|confirmed` và hoàn tồn đúng một lần. Payment/refund luôn
+gắn `provider=demo`, `is_simulation=true`, amount integer VND do server lấy từ
+order; không có lời gọi gateway, ngân hàng hoặc credential provider.
+
 The local password-reset demo sends no email and never returns the reset token from an API response. The `forgot-password` response is identical for existing and unknown email addresses. After requesting a reset for a known local demo account, retrieve its short-lived token from the trusted local container shell:
 
 ```bash

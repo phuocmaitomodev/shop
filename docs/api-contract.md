@@ -111,6 +111,11 @@ không dùng resource UUID hoặc order code đơn lẻ làm quyền truy cập.
 | GET | `/checkout/shipping-quote` | Phí cố định/miễn phí theo subtotal |
 | POST | `/orders` | Revalidate và tạo order |
 | GET | `/orders/lookup` | Guest tra cứu bằng order code + verification token phù hợp |
+| GET | `/orders/{order_code}` | Chi tiết đơn của customer owner |
+| POST | `/orders/{order_code}/cancel` | Hủy đơn đủ điều kiện, confirmation + idempotency |
+| GET | `/orders/{order_code}/payment` | Trạng thái payment mô phỏng |
+| POST | `/orders/{order_code}/refund-requests` | Tạo yêu cầu refund mô phỏng |
+| GET | `/orders/{order_code}/refund-requests/latest` | Yêu cầu refund mới nhất |
 
 Lookup token gửi qua `X-Order-Lookup-Token`, không đặt vào URL. Bổ sung
 `GET /orders/{order_code}/payment`, `POST /orders/{order_code}/refund-requests`
