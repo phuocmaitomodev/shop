@@ -3,7 +3,7 @@ import { createPinia } from 'pinia'
 import { createMemoryHistory } from 'vue-router'
 import { describe, expect, it, vi } from 'vitest'
 
-vi.mock('../services/chat', () => ({ sendChatMessage: vi.fn() }))
+vi.mock('../services/chat', () => ({ confirmChatAction: vi.fn(), sendChatMessage: vi.fn() }))
 
 import App from '../App.vue'
 import { createAppRouter } from '../router'

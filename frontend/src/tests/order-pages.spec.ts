@@ -5,7 +5,7 @@ const mocks = vi.hoisted(() => ({
   lookupGuestOrder: vi.fn(), rememberGuestOrder: vi.fn(), push: vi.fn(),
   getOrder: vi.fn(), getPaymentDemo: vi.fn(), getLatestRefundRequest: vi.fn(),
   createActionConfirmation: vi.fn(), cancelOrder: vi.fn(), createRefundRequest: vi.fn(),
-  useOrderAccess: vi.fn(),
+  useOrderAccess: vi.fn(), requestChatAction: vi.fn(),
 }))
 vi.mock('../services/commerce', () => ({
   lookupGuestOrder: mocks.lookupGuestOrder, getOrder: mocks.getOrder, getPaymentDemo: mocks.getPaymentDemo,
@@ -13,6 +13,7 @@ vi.mock('../services/commerce', () => ({
   cancelOrder: mocks.cancelOrder, createRefundRequest: mocks.createRefundRequest,
 }))
 vi.mock('../stores/order-session', () => ({ rememberGuestOrder: mocks.rememberGuestOrder, useOrderAccess: mocks.useOrderAccess }))
+vi.mock('../stores/chat-action', () => ({ requestChatAction: mocks.requestChatAction }))
 vi.mock('vue-router', () => ({ useRouter: () => ({ push: mocks.push }), useRoute: () => ({ params: { orderCode: 'DH-001' } }) }))
 
 import OrderDetailPage from '../pages/OrderDetailPage.vue'
@@ -87,5 +88,30 @@ describe('order lookup and detail UI', () => {
       { reason: 'Đổi ý' },
       access.access,
     )
+  })
+
+  it('stages a typed refund context from trusted order state for the chat widget', async () => {
+    const access = { order, access: { mode: 'guest', lookup_token: 'secret-token-long-enough' } }
+    mocks.useOrderAccess.mockReturnValue(access)
+    mocks.getPaymentDemo.mockResolvedValue(order.payment)
+    mocks.getLatestRefundRequest.mockResolvedValue(null)
+    const wrapper = mount(OrderDetailPage)
+    await flushPromises()
+
+    await wrapper.get('#refund-reason').setValue('transit_damage')
+    await wrapper.get('#refund-detail').setValue('Hộp bị móp khi giao')
+    await wrapper.get('[data-testid="chat-refund-request"]').trigger('click')
+
+    expect(mocks.requestChatAction).toHaveBeenCalledWith({
+      actionContext: {
+        action: 'refund_request',
+        order_id: 'order-1',
+        order_code: 'DH-001',
+        reason_code: 'transit_damage',
+        reason_detail: 'Hộp bị móp khi giao',
+      },
+      lookupToken: 'secret-token-long-enough',
+      prompt: 'Tạo yêu cầu hoàn tiền mô phỏng cho đơn DH-001',
+    })
   })
 })
