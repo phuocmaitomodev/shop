@@ -1198,6 +1198,58 @@ def test_chat_endpoint_contract_and_hydrated_response(monkeypatch) -> None:
     assert payload["meta"]["request_id"]
 
 
+def test_chat_endpoint_forwards_typed_action_context_to_production_adapter(
+    monkeypatch,
+) -> None:
+    observed = {}
+
+    async def fake_orchestrate(**kwargs):
+        observed.update(kwargs)
+        return ChatResult(
+            answer="Xác nhận thêm sản phẩm.",
+            products=[],
+            sources=[],
+            status="ok",
+        )
+
+    client = _client(monkeypatch)
+    monkeypatch.setattr(chat_api, "orchestrate_chat", fake_orchestrate)
+    with client:
+        response = client.post(
+            "/api/v1/chat",
+            json={
+                "message": "Thêm sản phẩm",
+                "action_context": {
+                    "action": "cart_add",
+                    "cart_id": "00000000-0000-0000-0000-000000000010",
+                    "variant_id": "00000000-0000-0000-0000-000000000011",
+                    "quantity": 1,
+                },
+            },
+        )
+
+    assert response.status_code == 200
+    assert observed["action_context"].action == "cart_add"
+    assert observed["action_adapter"].__class__.__name__ == "DatabaseChatActionAdapter"
+
+
+def test_unrelated_malformed_idempotency_header_does_not_reject_read_only_chat(
+    monkeypatch,
+) -> None:
+    with _client(monkeypatch) as client:
+        response = client.post(
+            "/api/v1/chat",
+            headers={"Idempotency-Key": "x"},
+            json={
+                "message": "Tìm áo thun đen",
+                "history": [{"role": "user", "content": "size M"}],
+            },
+        )
+
+    assert response.status_code == 200
+    assert response.json()["data"]["status"] == "ok"
+
+
 def test_chat_endpoint_forwards_locked_guest_order_lookup_evidence(monkeypatch) -> None:
     ownership = CommerceOwnershipContext(
         order_code="DH-20261103-ABC123", order_lookup_token_hash="lookup-hash"

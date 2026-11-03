@@ -81,9 +81,7 @@ def _embedding_provider(settings: Settings):
 async def chat(
     payload: ChatRequest,
     request: Request,
-    idempotency_key: str | None = Header(
-        default=None, min_length=8, max_length=200, alias="Idempotency-Key"
-    ),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
     _lookup_token: str | None = Header(
         default=None,
         min_length=20,
@@ -113,42 +111,17 @@ async def chat(
             code="RATE_LIMITED",
             message="Bạn đã gửi quá nhiều yêu cầu. Vui lòng thử lại sau.",
         )
-    if payload.action_context is not None:
-        proposal = await DatabaseChatActionAdapter(session, request).propose(
-            payload.action_context
-        )
-        return {
-            "data": ChatResponse(
-                answer=proposal.summary,
-                products=[],
-                sources=[],
-                status="ok",
-                proposed_action=asdict(proposal),
-            ),
-            "meta": {"request_id": request.state.request_id},
-        }
     if payload.confirmation_token is not None:
-        if idempotency_key is None or payload.client_message_id is None:
+        if (
+            idempotency_key is None
+            or not 8 <= len(idempotency_key.strip()) <= 200
+            or payload.client_message_id is None
+        ):
             raise AppError(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 code="IDEMPOTENCY_KEY_REQUIRED",
                 message="Lượt xác nhận cần Idempotency-Key và client_message_id.",
             )
-        execution = await DatabaseChatActionAdapter(session, request).confirm(
-            token=payload.confirmation_token,
-            idempotency_key=idempotency_key,
-            client_message_id=payload.client_message_id,
-        )
-        return {
-            "data": ChatResponse(
-                answer=execution.summary,
-                products=[],
-                sources=[],
-                status="ok",
-                proposed_action=None,
-            ),
-            "meta": {"request_id": request.state.request_id},
-        }
     result = await orchestrate_chat(
         session=session,
         message=payload.message.strip(),
@@ -160,6 +133,11 @@ async def chat(
         embedding_provider=_embedding_provider(settings),
         commerce_repository=commerce_repository,
         ownership_context=ownership_context,
+        action_context=payload.action_context,
+        action_adapter=DatabaseChatActionAdapter(session, request),
+        confirmation_token=payload.confirmation_token,
+        idempotency_key=idempotency_key,
+        client_message_id=payload.client_message_id,
     )
     return {
         "data": ChatResponse(
@@ -167,7 +145,9 @@ async def chat(
             products=[asdict(product) for product in result.products],
             sources=[asdict(source) for source in result.sources],
             status=result.status,
-            proposed_action=result.proposed_action,
+            proposed_action=(
+                asdict(result.proposed_action) if result.proposed_action is not None else None
+            ),
         ),
         "meta": {"request_id": request.state.request_id},
     }

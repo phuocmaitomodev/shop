@@ -13,6 +13,7 @@ from uuid import UUID
 import httpx
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.commerce.chat_actions import ChatActionExecution, ChatActionProposal
 from app.rag.provider import PermanentIndexingError, RetryableIndexingError
 from app.rag.retrieval import (
     ProductRetrievalFilters,
@@ -22,6 +23,7 @@ from app.rag.retrieval import (
     retrieve_products,
 )
 from app.return_policy_seed import RETURN_POLICY, RETURN_POLICY_CONTENT
+from app.schemas.chat import ChatActionContext
 
 
 ChatStatus = Literal[
@@ -108,7 +110,7 @@ class ChatResult:
     products: list[ChatProduct]
     sources: list[ChatSource]
     status: ChatStatus
-    proposed_action: None = None
+    proposed_action: ChatActionProposal | None = None
 
 
 @dataclass(frozen=True)
@@ -341,6 +343,18 @@ class CommerceReadRepository(Protocol):
     async def get_refund_status(
         self, context: CommerceOwnershipContext, order_code: str
     ) -> RefundDemoReadModel | None: ...
+
+
+class CommerceActionAdapter(Protocol):
+    async def propose(self, context: ChatActionContext) -> ChatActionProposal: ...
+
+    async def confirm(
+        self,
+        *,
+        token: str,
+        idempotency_key: str,
+        client_message_id: UUID,
+    ) -> ChatActionExecution: ...
 
 
 _CommerceResult = TypeVar("_CommerceResult")
@@ -1281,7 +1295,55 @@ async def orchestrate_chat(
     ] = retrieve_knowledge,
     commerce_repository: CommerceReadRepository | None = None,
     ownership_context: CommerceOwnershipContext | None = None,
+    action_context: ChatActionContext | None = None,
+    action_adapter: CommerceActionAdapter | None = None,
+    confirmation_token: str | None = None,
+    idempotency_key: str | None = None,
+    client_message_id: UUID | None = None,
 ) -> ChatResult:
+    if confirmation_token is not None:
+        if (
+            action_adapter is None
+            or idempotency_key is None
+            or not 8 <= len(idempotency_key.strip()) <= 200
+            or client_message_id is None
+        ):
+            return _fallback("insufficient_data")
+        try:
+            execution = await action_adapter.confirm(
+                token=confirmation_token,
+                idempotency_key=idempotency_key.strip(),
+                client_message_id=client_message_id,
+            )
+        except (KeyError, TypeError, ValueError):
+            return _fallback("insufficient_data")
+        if not isinstance(execution, ChatActionExecution):
+            return _fallback("insufficient_data")
+        return ChatResult(
+            answer=execution.summary,
+            products=[],
+            sources=[],
+            status="ok",
+        )
+    if action_context is not None:
+        if action_adapter is None:
+            return _fallback("provider_unavailable")
+        try:
+            proposal = await action_adapter.propose(action_context)
+        except (KeyError, TypeError, ValueError):
+            return _fallback("insufficient_data")
+        if (
+            not isinstance(proposal, ChatActionProposal)
+            or proposal.action != action_context.action
+        ):
+            return _fallback("insufficient_data")
+        return ChatResult(
+            answer=proposal.summary,
+            products=[],
+            sources=[],
+            status="ok",
+            proposed_action=proposal,
+        )
     intent = _deterministic_intent(message, history)
     if intent in {"out_of_scope", "prompt_injection"}:
         return _fallback("out_of_scope")

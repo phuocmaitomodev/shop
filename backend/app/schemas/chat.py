@@ -156,7 +156,7 @@ class ProposedActionResponse(BaseModel):
     ]
     resource_code: str
     summary: str
-    requires_confirmation: Literal[True] = True
+    requires_confirmation: Literal[True]
     confirmation_token: str
     expires_at: datetime
 
