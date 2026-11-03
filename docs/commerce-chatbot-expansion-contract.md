@@ -127,6 +127,9 @@ bind với owner/session, action, exact resource IDs, normalized payload hash v�
 đa 5 phút. Database chỉ lưu token hash và consume atomically đúng một lần. Chat không
 thực thi mutation trong cùng lượt đề xuất. Lượt xác nhận gửi token server-issued,
 `client_message_id` và `Idempotency-Key`, không dựng lại payload từ prose. Adapter
+phải khóa row confirmation và bind atomically cả `client_message_id` lẫn hash của
+`Idempotency-Key` trước mọi mutation attempt; retry chỉ hợp lệ khi cả hai giá trị
+khớp binding, còn partial binding hoặc thay một trong hai phải fail closed. Adapter
 phải reauthorize, rehydrate/revalidate cart version, variant/stock/price, order state
 và refund eligibility rồi gọi đúng cùng commerce use-case/service đã được API trực
 tiếp sử dụng và review; không có business mutation fork riêng cho RAG. Idempotency

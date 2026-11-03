@@ -383,7 +383,9 @@ class DatabaseChatActionAdapter:
             action_payload = confirmation.payload_json.get("action_context")
             if not isinstance(action_payload, dict):
                 raise self._invalid_confirmation()
-            await self._bind_client_message(confirmation.id, client_message_id)
+            await self._bind_confirmation_attempt(
+                confirmation.id, client_message_id, idempotency_key
+            )
         if confirmation.action == "order_create":
             context = OrderCreateActionContext.model_validate(
                 confirmation.payload_json["action_context"]
@@ -551,8 +553,11 @@ class DatabaseChatActionAdapter:
             summary=summary,
         )
 
-    async def _bind_client_message(
-        self, confirmation_id: UUID, client_message_id: UUID
+    async def _bind_confirmation_attempt(
+        self,
+        confirmation_id: UUID,
+        client_message_id: UUID,
+        idempotency_key: str,
     ) -> None:
         confirmation = await self._session.scalar(
             select(ActionConfirmation)
@@ -562,12 +567,19 @@ class DatabaseChatActionAdapter:
         )
         if confirmation is None:
             raise self._invalid_confirmation()
-        supplied = str(client_message_id)
-        bound = confirmation.payload_json.get("confirmed_client_message_id")
-        if bound == supplied:
+        supplied_message_id = str(client_message_id)
+        supplied_key_hash = hash_token(idempotency_key)
+        bound_message_id = confirmation.payload_json.get("confirmed_client_message_id")
+        bound_key_hash = confirmation.payload_json.get(
+            "confirmed_idempotency_key_hash"
+        )
+        if (
+            bound_message_id == supplied_message_id
+            and bound_key_hash == supplied_key_hash
+        ):
             await self._session.commit()
             return
-        if bound is not None:
+        if bound_message_id is not None or bound_key_hash is not None:
             raise AppError(
                 status_code=status.HTTP_409_CONFLICT,
                 code="IDEMPOTENCY_KEY_REUSED",
@@ -579,7 +591,8 @@ class DatabaseChatActionAdapter:
             raise self._invalid_confirmation()
         confirmation.payload_json = {
             **confirmation.payload_json,
-            "confirmed_client_message_id": supplied,
+            "confirmed_client_message_id": supplied_message_id,
+            "confirmed_idempotency_key_hash": supplied_key_hash,
         }
         await self._session.commit()
 

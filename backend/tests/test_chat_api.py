@@ -702,10 +702,7 @@ def test_chat_guest_lookup_can_propose_and_confirm_cancel_without_cart_cookie(
     assert key_conflict.status_code == 409, key_conflict.text
     assert key_conflict.json()["error"]["code"] == "IDEMPOTENCY_KEY_REUSED"
     assert consumed_replay.status_code == 409, consumed_replay.text
-    assert (
-        consumed_replay.json()["error"]["code"]
-        == "ORDER_STATUS_NOT_CANCELLABLE"
-    )
+    assert consumed_replay.json()["error"]["code"] == "IDEMPOTENCY_KEY_REUSED"
     persisted = auth_client.get(
         "/api/v1/orders/lookup",
         params={"order_code": order["order_code"]},
@@ -959,7 +956,7 @@ def test_chat_order_confirmation_binds_client_message_before_mutation_attempt(
     assert response.status_code == 409, response.text
     assert response.json()["error"]["code"] == "ORDER_STATUS_NOT_CANCELLABLE"
 
-    async def bound_client_message() -> str | None:
+    async def bound_confirmation_attempt() -> tuple[str | None, str | None]:
         async with auth_session_factory() as session:
             confirmation = await session.scalar(
                 select(ActionConfirmation).where(
@@ -967,9 +964,143 @@ def test_chat_order_confirmation_binds_client_message_before_mutation_attempt(
                 )
             )
             assert confirmation is not None
-            return confirmation.payload_json.get("confirmed_client_message_id")
+            return (
+                confirmation.payload_json.get("confirmed_client_message_id"),
+                confirmation.payload_json.get("confirmed_idempotency_key_hash"),
+            )
 
-    assert asyncio.run(bound_client_message()) == client_message_id
+    assert asyncio.run(bound_confirmation_attempt()) == (
+        client_message_id,
+        hash_token("chat-prebind-cancel"),
+    )
+
+    async def make_order_eligible() -> None:
+        async with auth_session_factory() as session:
+            persisted = await session.get(Order, UUID(order["id"]))
+            assert persisted is not None
+            persisted.status = "pending_confirmation"
+            await session.commit()
+
+    asyncio.run(make_order_eligible())
+    changed_key = auth_client.post(
+        "/api/v1/chat",
+        headers={**lookup_headers, "Idempotency-Key": "chat-prebind-cancel-changed"},
+        json={
+            "message": "Xác nhận bằng khóa khác",
+            "confirmation_token": proposal.json()["data"]["proposed_action"][
+                "confirmation_token"
+            ],
+            "client_message_id": client_message_id,
+        },
+    )
+    assert changed_key.status_code == 409, changed_key.text
+    assert changed_key.json()["error"]["code"] == "IDEMPOTENCY_KEY_REUSED"
+
+    retry = auth_client.post(
+        "/api/v1/chat",
+        headers={**lookup_headers, "Idempotency-Key": "chat-prebind-cancel"},
+        json={
+            "message": "Thử lại xác nhận",
+            "confirmation_token": proposal.json()["data"]["proposed_action"][
+                "confirmation_token"
+            ],
+            "client_message_id": client_message_id,
+        },
+    )
+    assert retry.status_code == 200, retry.text
+
+
+def test_chat_refund_confirmation_binds_idempotency_key_before_mutation_attempt(
+    auth_client: TestClient,
+    auth_session_factory,
+    chat_action_catalog: dict[str, str],
+) -> None:
+    order = _create_guest_order_for_chat_action(
+        auth_client,
+        chat_action_catalog["variant_id"],
+        idempotency_key="chat-refund-prebind-create",
+        payment_method="online_demo",
+    )
+
+    async def set_order_state(order_status: str, payment_status: str) -> None:
+        async with auth_session_factory() as session:
+            persisted = await session.get(Order, UUID(order["id"]))
+            assert persisted is not None
+            payment = await session.scalar(
+                select(PaymentAttempt).where(PaymentAttempt.order_id == persisted.id)
+            )
+            assert payment is not None
+            persisted.status = order_status
+            persisted.payment_status = payment_status
+            payment.status = payment_status
+            await session.commit()
+
+    asyncio.run(set_order_state("completed", "demo_approved"))
+    lookup_headers = {"X-Order-Lookup-Token": order["guest_lookup_token"]}
+    auth_client.cookies.clear()
+    proposal = auth_client.post(
+        "/api/v1/chat",
+        headers=lookup_headers,
+        json={
+            "message": "Yêu cầu hoàn tiền",
+            "action_context": {
+                "action": "refund_request",
+                "order_id": order["id"],
+                "order_code": order["order_code"],
+                "reason_code": "wrong_item",
+                "reason_detail": "Nhận sai sản phẩm",
+            },
+        },
+    )
+    assert proposal.status_code == 200, proposal.text
+    token = proposal.json()["data"]["proposed_action"]["confirmation_token"]
+    message_id = "00000000-0000-0000-0000-000000000094"
+
+    asyncio.run(set_order_state("confirmed", "demo_approved"))
+    rejected = auth_client.post(
+        "/api/v1/chat",
+        headers={**lookup_headers, "Idempotency-Key": "chat-refund-prebind"},
+        json={
+            "message": "Xác nhận",
+            "confirmation_token": token,
+            "client_message_id": message_id,
+        },
+    )
+    assert rejected.status_code == 409, rejected.text
+    assert rejected.json()["error"]["code"] == "REFUND_NOT_ELIGIBLE"
+
+    asyncio.run(set_order_state("completed", "demo_approved"))
+    changed_key = auth_client.post(
+        "/api/v1/chat",
+        headers={**lookup_headers, "Idempotency-Key": "chat-refund-prebind-changed"},
+        json={
+            "message": "Xác nhận bằng khóa khác",
+            "confirmation_token": token,
+            "client_message_id": message_id,
+        },
+    )
+    assert changed_key.status_code == 409, changed_key.text
+    assert changed_key.json()["error"]["code"] == "IDEMPOTENCY_KEY_REUSED"
+
+    async def refund_count() -> int:
+        async with auth_session_factory() as session:
+            rows = await session.scalars(
+                select(RefundRequest).where(RefundRequest.order_id == UUID(order["id"]))
+            )
+            return len(rows.all())
+
+    assert asyncio.run(refund_count()) == 0
+    retry = auth_client.post(
+        "/api/v1/chat",
+        headers={**lookup_headers, "Idempotency-Key": "chat-refund-prebind"},
+        json={
+            "message": "Thử lại xác nhận",
+            "confirmation_token": token,
+            "client_message_id": message_id,
+        },
+    )
+    assert retry.status_code == 200, retry.text
+    assert asyncio.run(refund_count()) == 1
 
 
 def test_chat_refund_request_uses_server_order_amount(

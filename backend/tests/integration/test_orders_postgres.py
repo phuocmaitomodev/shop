@@ -3,6 +3,7 @@ import os
 import socket
 from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
+from threading import Barrier, Event, Thread
 from uuid import UUID, uuid4
 
 import pytest
@@ -13,6 +14,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
 
 from app.core.security import hash_token
+from app.commerce.chat_actions import DatabaseChatActionAdapter
 from app.db.session import get_db_session
 from app.main import create_app
 from app.models.catalog import Category, Color, Product, ProductVariant, Size
@@ -162,7 +164,9 @@ def test_postgres_concurrent_cancel_restores_stock_once() -> None:
     asyncio.run(api_engine.dispose())
 
 
-def test_postgres_concurrent_refund_allows_one_active_request() -> None:
+def test_postgres_chat_refund_confirmation_serializes_binding_and_side_effect(
+    monkeypatch,
+) -> None:
     assert MIGRATION_DATABASE_URL is not None
     require_fresh_migrated_database(MIGRATION_DATABASE_URL)
 
@@ -257,37 +261,101 @@ def test_postgres_concurrent_refund_allows_one_active_request() -> None:
             "reason_code": "manufacturer_fault",
             "reason_detail": "Sản phẩm bị lỗi",
         }
-        first_token = issue_confirmation(
-            first, "refund_request", order["order_code"], refund_payload
+        proposal = first.post(
+            "/api/v1/chat",
+            json={
+                "message": "Yêu cầu hoàn tiền",
+                "action_context": {
+                    "action": "refund_request",
+                    "order_id": order["id"],
+                    "order_code": order["order_code"],
+                    **refund_payload,
+                },
+            },
         )
-        second_token = issue_confirmation(
-            second, "refund_request", order["order_code"], refund_payload
-        )
+        assert proposal.status_code == 200, proposal.text
+        token = proposal.json()["data"]["proposed_action"]["confirmation_token"]
+        attempt_barrier = Barrier(3)
+        original_bind = DatabaseChatActionAdapter._bind_confirmation_attempt
 
-        def refund(args: tuple[TestClient, str, str]) -> tuple[int, str | None]:
-            client, token, key = args
+        async def bind_after_barrier(adapter, *args, **kwargs):
+            await asyncio.to_thread(attempt_barrier.wait)
+            return await original_bind(adapter, *args, **kwargs)
+
+        monkeypatch.setattr(
+            DatabaseChatActionAdapter,
+            "_bind_confirmation_attempt",
+            bind_after_barrier,
+        )
+        lock_acquired = Event()
+        release_lock = Event()
+
+        async def hold_confirmation_lock() -> None:
+            async with api_session_factory() as session:
+                async with session.begin():
+                    locked = await session.scalar(
+                        select(ActionConfirmation)
+                        .where(ActionConfirmation.token_hash == hash_token(token))
+                        .with_for_update()
+                    )
+                    assert locked is not None
+                    lock_acquired.set()
+                    await asyncio.to_thread(release_lock.wait)
+
+        lock_thread = Thread(target=lambda: asyncio.run(hold_confirmation_lock()))
+        lock_thread.start()
+        assert lock_acquired.wait(timeout=5)
+
+        def refund(args: tuple[TestClient, str, str]) -> tuple[str, str, int, str | None]:
+            client, message_id, key = args
             response = client.post(
-                f"/api/v1/orders/{order['order_code']}/refund-requests",
+                "/api/v1/chat",
                 headers={"Idempotency-Key": key},
-                json={**refund_payload, "confirmation_token": token},
+                json={
+                    "message": "Xác nhận",
+                    "confirmation_token": token,
+                    "client_message_id": message_id,
+                },
             )
-            return response.status_code, response.json().get("error", {}).get("code")
+            return (
+                message_id,
+                key,
+                response.status_code,
+                response.json().get("error", {}).get("code"),
+            )
 
         with ThreadPoolExecutor(max_workers=2) as executor:
-            outcomes = list(
-                executor.map(
-                    refund,
+            futures = [
+                executor.submit(refund, attempt)
+                for attempt in (
                     (
-                        (first, first_token, "postgres-refund-first"),
-                        (second, second_token, "postgres-refund-second"),
+                        first,
+                        "00000000-0000-0000-0000-000000000095",
+                        "postgres-chat-refund-first",
+                    ),
+                    (
+                        second,
+                        "00000000-0000-0000-0000-000000000096",
+                        "postgres-chat-refund-second",
                     ),
                 )
-            )
+            ]
+            attempt_barrier.wait(timeout=5)
+            assert all(not future.done() for future in futures)
+            release_lock.set()
+            outcomes = [future.result(timeout=10) for future in futures]
+        lock_thread.join(timeout=5)
+        assert not lock_thread.is_alive()
 
-    assert sorted(status_code for status_code, _ in outcomes) == [201, 409], outcomes
-    assert {code for _, code in outcomes if code} == {"REFUND_REQUEST_EXISTS"}
+    assert sorted(status_code for _, _, status_code, _ in outcomes) == [200, 409], outcomes
+    assert {code for _, _, _, code in outcomes if code} == {"IDEMPOTENCY_KEY_REUSED"}
+    winning_attempt = next(
+        (message_id, key)
+        for message_id, key, status_code, _ in outcomes
+        if status_code == 200
+    )
 
-    async def persisted_state() -> tuple[int, int]:
+    async def persisted_state() -> tuple[int, int, int, int, str | None, str | None]:
         async with api_session_factory() as session:
             count = await session.scalar(
                 select(func.count()).select_from(RefundRequest).where(
@@ -299,9 +367,35 @@ def test_postgres_concurrent_refund_allows_one_active_request() -> None:
                     RefundRequest.order_id == UUID(order["id"])
                 )
             )
-            return int(count or 0), int(amount or 0)
+            confirmation = await session.scalar(
+                select(ActionConfirmation).where(
+                    ActionConfirmation.token_hash == hash_token(token)
+                )
+            )
+            assert confirmation is not None
+            records = await session.scalar(
+                select(func.count()).select_from(IdempotencyRecord).where(
+                    IdempotencyRecord.operation == "refund_request",
+                    IdempotencyRecord.resource_key == order["order_code"],
+                )
+            )
+            return (
+                int(count or 0),
+                int(amount or 0),
+                int(confirmation.consumed_at is not None),
+                int(records or 0),
+                confirmation.payload_json.get("confirmed_client_message_id"),
+                confirmation.payload_json.get("confirmed_idempotency_key_hash"),
+            )
 
-    assert asyncio.run(persisted_state()) == (1, order["total"])
+    assert asyncio.run(persisted_state()) == (
+        1,
+        order["total"],
+        1,
+        1,
+        winning_attempt[0],
+        hash_token(winning_attempt[1]),
+    )
     application.dependency_overrides.clear()
     asyncio.run(api_engine.dispose())
 
@@ -758,7 +852,7 @@ def test_postgres_chat_confirmation_concurrent_consume_is_idempotent() -> None:
     asyncio.run(api_engine.dispose())
 
 
-def test_postgres_chat_guest_lookup_ownership_and_concurrent_cancel() -> None:
+def test_postgres_chat_guest_lookup_ownership_and_concurrent_cancel(monkeypatch) -> None:
     assert MIGRATION_DATABASE_URL is not None
     require_fresh_migrated_database(MIGRATION_DATABASE_URL)
 
@@ -864,18 +958,45 @@ def test_postgres_chat_guest_lookup_ownership_and_concurrent_cancel() -> None:
         proposal = first.post("/api/v1/chat", headers=lookup_headers, json=action)
         assert proposal.status_code == 200, proposal.text
         token = proposal.json()["data"]["proposed_action"]["confirmation_token"]
-        headers = {
-            **lookup_headers,
-            "Idempotency-Key": "postgres-chat-lookup-cancel",
-        }
         first_message_id = "00000000-0000-0000-0000-000000000083"
         second_message_id = "00000000-0000-0000-0000-000000000084"
+        attempt_barrier = Barrier(4)
+        original_bind = DatabaseChatActionAdapter._bind_confirmation_attempt
 
-        def confirm(attempt: tuple[TestClient, str]) -> tuple[str, int, str]:
-            client, client_message_id = attempt
+        async def bind_after_barrier(adapter, *args, **kwargs):
+            await asyncio.to_thread(attempt_barrier.wait)
+            return await original_bind(adapter, *args, **kwargs)
+
+        monkeypatch.setattr(
+            DatabaseChatActionAdapter,
+            "_bind_confirmation_attempt",
+            bind_after_barrier,
+        )
+
+        lock_acquired = Event()
+        release_lock = Event()
+
+        async def hold_confirmation_lock() -> None:
+            async with api_session_factory() as session:
+                async with session.begin():
+                    locked = await session.scalar(
+                        select(ActionConfirmation)
+                        .where(ActionConfirmation.token_hash == hash_token(token))
+                        .with_for_update()
+                    )
+                    assert locked is not None
+                    lock_acquired.set()
+                    await asyncio.to_thread(release_lock.wait)
+
+        lock_thread = Thread(target=lambda: asyncio.run(hold_confirmation_lock()))
+        lock_thread.start()
+        assert lock_acquired.wait(timeout=5)
+
+        def confirm(attempt: tuple[TestClient, str, str]) -> tuple[str, str, int, str]:
+            client, client_message_id, idempotency_key = attempt
             response = client.post(
                 "/api/v1/chat",
-                headers=headers,
+                headers={**lookup_headers, "Idempotency-Key": idempotency_key},
                 json={
                     "message": "Xác nhận",
                     "confirmation_token": token,
@@ -888,31 +1009,37 @@ def test_postgres_chat_guest_lookup_ownership_and_concurrent_cancel() -> None:
                 if response.status_code == 200
                 else payload["error"]["code"]
             )
-            return client_message_id, response.status_code, detail
+            return client_message_id, idempotency_key, response.status_code, detail
 
         attempts = (
-            (first, first_message_id),
-            (second, first_message_id),
-            (third, second_message_id),
+            (first, first_message_id, "postgres-chat-lookup-cancel"),
+            (second, first_message_id, "postgres-chat-lookup-cancel"),
+            (third, second_message_id, "postgres-chat-lookup-cancel-changed"),
         )
         with ThreadPoolExecutor(max_workers=3) as executor:
-            outcomes = list(executor.map(confirm, attempts))
+            futures = [executor.submit(confirm, attempt) for attempt in attempts]
+            attempt_barrier.wait(timeout=5)
+            assert all(not future.done() for future in futures)
+            release_lock.set()
+            outcomes = [future.result(timeout=10) for future in futures]
+        lock_thread.join(timeout=5)
+        assert not lock_thread.is_alive()
 
-    winning_message_ids = {
-        client_message_id
-        for client_message_id, status_code, _ in outcomes
+    winning_attempts = {
+        (client_message_id, idempotency_key)
+        for client_message_id, idempotency_key, status_code, _ in outcomes
         if status_code == 200
     }
-    assert len(winning_message_ids) == 1
-    winning_message_id = next(iter(winning_message_ids))
-    for client_message_id, status_code, detail in outcomes:
-        if client_message_id == winning_message_id:
+    assert len(winning_attempts) == 1
+    winning_attempt = next(iter(winning_attempts))
+    for client_message_id, idempotency_key, status_code, detail in outcomes:
+        if (client_message_id, idempotency_key) == winning_attempt:
             assert status_code == 200
         else:
             assert status_code == 409
             assert detail == "IDEMPOTENCY_KEY_REUSED"
 
-    async def persisted_state() -> tuple[str, int, int, int, str | None]:
+    async def persisted_state() -> tuple[str, int, int, int, str | None, str | None]:
         async with api_session_factory() as session:
             persisted_order = await session.get(Order, UUID(order["id"]))
             assert persisted_order is not None
@@ -940,6 +1067,7 @@ def test_postgres_chat_guest_lookup_ownership_and_concurrent_cancel() -> None:
                 int(confirmation.consumed_at is not None),
                 int(records or 0),
                 confirmation.payload_json.get("confirmed_client_message_id"),
+                confirmation.payload_json.get("confirmed_idempotency_key_hash"),
             )
 
     assert asyncio.run(persisted_state()) == (
@@ -947,7 +1075,8 @@ def test_postgres_chat_guest_lookup_ownership_and_concurrent_cancel() -> None:
         1,
         1,
         1,
-        winning_message_id,
+        winning_attempt[0],
+        hash_token(winning_attempt[1]),
     )
     application.dependency_overrides.clear()
     asyncio.run(api_engine.dispose())
