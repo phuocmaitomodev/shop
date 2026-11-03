@@ -69,7 +69,50 @@ def test_rag_content_metadata_defines_required_tables() -> None:
         )
 
 
-def test_alembic_has_single_loadable_rag_content_head_that_enables_pgvector(
+def test_commerce_metadata_defines_required_tables() -> None:
+    assert {
+        "action_confirmations",
+        "cart_items",
+        "carts",
+        "coupon_redemptions",
+        "coupons",
+        "idempotency_records",
+        "inventory_movements",
+        "order_items",
+        "orders",
+        "payment_attempts",
+        "refund_requests",
+        "system_settings",
+    } <= set(metadata.tables)
+
+
+def test_confirmation_and_refund_metadata_enforce_locked_security_contract() -> None:
+    confirmation = metadata.tables["action_confirmations"]
+    confirmation_checks = {
+        str(constraint.sqltext)
+        for constraint in confirmation.constraints
+        if hasattr(constraint, "sqltext")
+    }
+    refund = metadata.tables["refund_requests"]
+    refund_checks = {
+        str(constraint.sqltext)
+        for constraint in refund.constraints
+        if hasattr(constraint, "sqltext")
+    }
+
+    assert confirmation.c.session_key.nullable is False
+    assert any(
+        "expires_at <= created_at + interval '5 minutes'" in check
+        for check in confirmation_checks
+    )
+    assert any(
+        "reason_code IN ('manufacturer_fault', 'transit_damage', "
+        "'wrong_item', 'other')" in check
+        for check in refund_checks
+    )
+
+
+def test_alembic_has_single_loadable_commerce_head_that_enables_pgvector(
     monkeypatch,
 ) -> None:
     backend_dir = Path(__file__).resolve().parents[1]
@@ -78,10 +121,10 @@ def test_alembic_has_single_loadable_rag_content_head_that_enables_pgvector(
     scripts = ScriptDirectory.from_config(config)
 
     heads = scripts.get_heads()
-    assert heads == ["0005_rag_chunks"]
+    assert heads == ["0006_commerce_foundation"]
 
-    rag_chunks_revision = scripts.get_revision(heads[0])
-    assert rag_chunks_revision.down_revision == "0004_rag_content"
+    commerce_revision = scripts.get_revision(heads[0])
+    assert commerce_revision.down_revision == "0005_rag_chunks"
 
     revision = scripts.get_revision("0001_enable_pgvector")
     executed_sql = []

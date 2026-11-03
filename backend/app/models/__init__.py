@@ -9,15 +9,39 @@ from app.models.catalog import (
     ProductVariant,
     Size,
 )
+from app.models.commerce import (
+    ActionConfirmation,
+    Cart,
+    CartItem,
+    Coupon,
+    CouponRedemption,
+    IdempotencyRecord,
+    InventoryMovement,
+    Order,
+    OrderItem,
+    PaymentAttempt,
+    RefundRequest,
+    SystemSetting,
+)
 from app.models.knowledge import KnowledgeDocument, RagChunk, RagDocument, RagIndexJob
 
 __all__ = [
     "AuthSession",
+    "ActionConfirmation",
+    "Cart",
+    "CartItem",
     "Category",
     "Color",
+    "Coupon",
+    "CouponRedemption",
+    "IdempotencyRecord",
+    "InventoryMovement",
     "Label",
     "KnowledgeDocument",
     "PasswordResetToken",
+    "Order",
+    "OrderItem",
+    "PaymentAttempt",
     "Product",
     "ProductImage",
     "ProductLabel",
@@ -25,6 +49,8 @@ __all__ = [
     "RagChunk",
     "RagDocument",
     "RagIndexJob",
+    "RefundRequest",
     "Size",
+    "SystemSetting",
     "User",
 ]

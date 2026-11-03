@@ -11,6 +11,10 @@ def test_settings_are_loaded_from_environment(monkeypatch) -> None:
     monkeypatch.setenv("CORS_ALLOWED_ORIGINS", '["http://localhost:5176"]')
     monkeypatch.setenv("AUTH_SESSION_TTL_DAYS", "14")
     monkeypatch.setenv("PASSWORD_RESET_TTL_MINUTES", "20")
+    monkeypatch.setenv("GUEST_COOKIE_NAME", "shop_guest_test")
+    monkeypatch.setenv("GUEST_TOKEN_TTL_DAYS", "45")
+    monkeypatch.setenv("ACTION_CONFIRMATION_TTL_SECONDS", "240")
+    monkeypatch.setenv("IDEMPOTENCY_TTL_HOURS", "12")
 
     settings = Settings(_env_file=None)
 
@@ -20,6 +24,20 @@ def test_settings_are_loaded_from_environment(monkeypatch) -> None:
     assert settings.cors_allowed_origins == ["http://localhost:5176"]
     assert settings.auth_session_ttl_days == 14
     assert settings.password_reset_ttl_minutes == 20
+    assert settings.guest_cookie_name == "shop_guest_test"
+    assert settings.guest_token_ttl_days == 45
+    assert settings.action_confirmation_ttl_seconds == 240
+    assert settings.idempotency_ttl_hours == 12
+
+
+def test_confirmation_ttl_cannot_exceed_contract_limit(monkeypatch) -> None:
+    monkeypatch.setenv("APP_ENV", "test")
+    monkeypatch.setenv("APP_SECRET_KEY", "test-only-secret")
+    monkeypatch.setenv("DATABASE_URL", "postgresql+asyncpg://shop:shop@db:5432/shop")
+    monkeypatch.setenv("ACTION_CONFIRMATION_TTL_SECONDS", "301")
+
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None)
 
 
 def test_production_requires_secure_auth_cookie(monkeypatch) -> None:

@@ -50,6 +50,26 @@ Refresh rotates the opaque token, extends the current session TTL, and invalidat
 
 Authentication mutations have a bounded in-process rate limit for the local single-API demo. Session/reset TTLs and rate-limit values come from environment variables. Production startup rejects `AUTH_COOKIE_SECURE=false`.
 
+## Commerce ownership foundation
+
+Migration `0006_commerce_foundation` adds carts, coupons, orders, inventory
+movements, payment/refund demo records, idempotency records and one-time action
+confirmations. Guest credentials are opaque values sent only in HttpOnly,
+SameSite=Lax cookies or the dedicated lookup header; PostgreSQL stores SHA-256
+hashes and expiry timestamps, never raw tokens or idempotency keys. Payment and
+refund providers are fixed to the local `demo` state model and amounts use integer
+VND.
+
+To roll back only this foundation on a disposable database, run:
+
+```bash
+docker compose run --rm api alembic downgrade 0005_rag_chunks
+```
+
+This deletes all commerce tables and their data. For a full local reset, use
+`docker compose down --volumes`, recreate `db`, then run `alembic upgrade head`.
+Do not use either destructive command on a shared database.
+
 The local password-reset demo sends no email and never returns the reset token from an API response. The `forgot-password` response is identical for existing and unknown email addresses. After requesting a reset for a known local demo account, retrieve its short-lived token from the trusted local container shell:
 
 ```bash

@@ -15,6 +15,10 @@ class Settings(BaseSettings):
     auth_session_ttl_days: int = Field(default=7, gt=0)
     auth_cookie_name: str = "shop_session"
     auth_cookie_secure: bool = False
+    guest_cookie_name: str = "shop_guest"
+    guest_token_ttl_days: int = Field(default=30, gt=0)
+    action_confirmation_ttl_seconds: int = Field(default=300, gt=0, le=300)
+    idempotency_ttl_hours: int = Field(default=24, gt=0)
     password_reset_ttl_minutes: int = Field(default=30, gt=0)
     auth_rate_limit_attempts: int = Field(default=20, gt=0)
     auth_rate_limit_window_seconds: int = Field(default=60, gt=0)
