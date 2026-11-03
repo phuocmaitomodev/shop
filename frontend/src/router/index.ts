@@ -6,7 +6,6 @@ import {
 } from 'vue-router'
 
 import HomePage from '../pages/HomePage.vue'
-import CommerceRouteShell from '../pages/CommerceRouteShell.vue'
 import NotFoundPage from '../pages/NotFoundPage.vue'
 import PlaceholderPage from '../pages/PlaceholderPage.vue'
 
@@ -17,23 +16,6 @@ const placeholder = (path: string, name: string, title: string, description: str
   meta: { title, description },
 })
 
-const commerceShell = (
-  path: string,
-  name: string,
-  title: string,
-  description: string,
-  simulationNotice?: string,
-): RouteRecordRaw => ({
-  path,
-  name,
-  component: CommerceRouteShell,
-  meta: {
-    title,
-    description,
-    simulationNotice,
-    emptyMessage: 'Chưa kết nối API nghiệp vụ; không có mutation nào được gửi từ màn hình khung.',
-  },
-})
 
 export const routes: RouteRecordRaw[] = [
   { path: '/', name: 'home', component: HomePage, meta: { title: 'Trang chủ' } },
@@ -50,31 +32,20 @@ export const routes: RouteRecordRaw[] = [
     component: () => import('../pages/ProductDetailPage.vue'),
     meta: { title: 'Chi tiết sản phẩm' },
   },
-  commerceShell('/gio-hang', 'cart', 'Giỏ hàng', 'Màn hình khung cho giỏ hàng theo owner từ cookie HttpOnly.'),
-  commerceShell('/thanh-toan', 'checkout', 'Thanh toán', 'Màn hình khung xác nhận đơn; giá và tồn kho phải được server kiểm tra lại.'),
-  commerceShell('/dat-hang-thanh-cong', 'order-success', 'Đặt hàng thành công', 'Màn hình khung hiển thị mã đơn và kết quả do API trả về.'),
-  commerceShell('/tra-cuu-don-hang', 'order-lookup', 'Tra cứu đơn hàng', 'Khách tra cứu bằng mã đơn và token bí mật gửi trong header, không đặt token trong URL.'),
-  commerceShell(
-    '/don-hang/:orderCode/thanh-toan-demo',
-    'payment-demo',
-    'Trạng thái thanh toán demo',
-    'Hiển thị trạng thái payment provider=demo và số tiền VND do server trả về.',
-    'Không gọi cổng thanh toán hoặc phát sinh giao dịch thật.',
-  ),
-  commerceShell(
-    '/don-hang/:orderCode/hoan-tien-demo',
-    'refund-demo',
-    'Yêu cầu hoàn tiền mô phỏng',
-    'Màn hình khung cho trạng thái và yêu cầu hoàn tiền demo có xác nhận.',
-    'Không có giao dịch hoàn tiền thật hoặc kết nối ngân hàng.',
-  ),
+  { path: '/gio-hang', name: 'cart', component: () => import('../pages/CartPage.vue'), meta: { title: 'Giỏ hàng' } },
+  { path: '/thanh-toan', name: 'checkout', component: () => import('../pages/CheckoutPage.vue'), meta: { title: 'Thanh toán' } },
+  { path: '/dat-hang-thanh-cong', name: 'order-success', component: () => import('../pages/OrderSuccessPage.vue'), meta: { title: 'Đặt hàng thành công' } },
+  { path: '/tra-cuu-don-hang', name: 'order-lookup', component: () => import('../pages/OrderLookupPage.vue'), meta: { title: 'Tra cứu đơn hàng' } },
+  { path: '/don-hang/:orderCode', name: 'order-detail', component: () => import('../pages/OrderDetailPage.vue'), meta: { title: 'Chi tiết đơn hàng' } },
+  { path: '/don-hang/:orderCode/thanh-toan-demo', name: 'payment-demo', component: () => import('../pages/OrderDetailPage.vue'), meta: { title: 'Trạng thái thanh toán demo' } },
+  { path: '/don-hang/:orderCode/hoan-tien-demo', name: 'refund-demo', component: () => import('../pages/OrderDetailPage.vue'), meta: { title: 'Yêu cầu hoàn tiền mô phỏng' } },
   placeholder('/dang-nhap', 'login', 'Đăng nhập', 'Đăng nhập bằng email và mật khẩu sẽ được triển khai ở FE-02.'),
   placeholder('/dang-ky', 'register', 'Đăng ký', 'Tạo tài khoản khách hàng sẽ được triển khai ở FE-02.'),
   placeholder('/quen-mat-khau', 'forgot-password', 'Quên mật khẩu', 'Luồng đặt lại mật khẩu demo sẽ được triển khai ở FE-02.'),
   placeholder('/dat-lai-mat-khau', 'reset-password', 'Đặt lại mật khẩu', 'Biểu mẫu đặt lại mật khẩu sẽ được triển khai ở FE-02.'),
   placeholder('/tai-khoan', 'account', 'Tài khoản', 'Thông tin tài khoản khách hàng sẽ được triển khai ở FE-02.'),
   placeholder('/tai-khoan/don-hang', 'account-orders', 'Đơn hàng của tôi', 'Lịch sử đơn hàng sẽ được triển khai ở FE-02 và FE-05.'),
-  placeholder('/tai-khoan/don-hang/:orderCode', 'account-order-detail', 'Chi tiết đơn hàng', 'Chi tiết và thao tác hủy đơn hợp lệ sẽ được triển khai ở FE-05.'),
+  { path: '/tai-khoan/don-hang/:orderCode', name: 'account-order-detail', component: () => import('../pages/OrderDetailPage.vue'), meta: { title: 'Chi tiết đơn hàng' } },
   placeholder('/admin', 'admin-dashboard', 'Quản trị cửa hàng', 'Dashboard quản trị sẽ được triển khai ở FE-06.'),
   placeholder('/admin/san-pham', 'admin-products', 'Quản lý sản phẩm', 'CRUD sản phẩm và biến thể sẽ được triển khai ở FE-06.'),
   placeholder('/admin/don-hang', 'admin-orders', 'Quản lý đơn hàng', 'Quản lý trạng thái đơn hàng sẽ được triển khai ở FE-06.'),

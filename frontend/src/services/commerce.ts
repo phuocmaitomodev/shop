@@ -2,13 +2,14 @@ import type { ApiSuccess } from '../types/api'
 import type {
   AddCartItemRequest,
   Cart,
+  ConfirmationAction,
+  ConfirmationResponse,
   CreateOrderRequest,
   CreateRefundRequest,
   OrderAccessContext,
   OrderSummary,
   PaymentDemo,
   RefundRequest,
-  ShippingQuote,
   UpdateCartItemRequest,
 } from '../types/commerce'
 import { apiClient } from './api-client'
@@ -38,14 +39,23 @@ export const removeCartItem = (itemId: string, cartVersion: number) => (
   cartMutation(`/cart/items/${encodeURIComponent(itemId)}`, 'DELETE', { cart_version: cartVersion })
 )
 
-export const applyCartCoupon = (code: string) => (
-  cartMutation('/cart/coupon', 'POST', { code: code.trim() })
+export const applyCartCoupon = (code: string, cartVersion: number) => (
+  cartMutation('/cart/coupon', 'POST', { code: code.trim(), cart_version: cartVersion })
 )
 
-export const removeCartCoupon = () => cartMutation('/cart/coupon', 'DELETE', {})
+export const removeCartCoupon = (cartVersion: number) => (
+  cartMutation('/cart/coupon', 'DELETE', { cart_version: cartVersion })
+)
 
-export const getShippingQuote = async (): Promise<ShippingQuote> => {
-  const response = await apiClient<ApiSuccess<ShippingQuote>>('/checkout/shipping-quote')
+export const createActionConfirmation = async (
+  action: ConfirmationAction,
+  resourceKey: string,
+  payload: Record<string, unknown>,
+): Promise<ConfirmationResponse> => {
+  const response = await apiClient<ApiSuccess<ConfirmationResponse>>('/action-confirmations', {
+    method: 'POST',
+    body: JSON.stringify({ action, resource_key: resourceKey, payload }),
+  })
   return response.data
 }
 
@@ -90,6 +100,7 @@ export const cancelOrder = async (
   confirmationToken: string,
   idempotencyKey: string,
   access: OrderAccessContext = { mode: 'authenticated' },
+  reason: string | null = null,
 ): Promise<OrderSummary> => {
   const response = await apiClient<ApiSuccess<OrderSummary>>(orderPath(orderCode, '/cancel'), {
     method: 'POST',
@@ -97,7 +108,7 @@ export const cancelOrder = async (
       ...ownershipHeaders(access),
       'Idempotency-Key': idempotencyKey,
     },
-    body: JSON.stringify({ confirmation_token: confirmationToken }),
+    body: JSON.stringify({ reason, confirmation_token: confirmationToken }),
   })
   return response.data
 }

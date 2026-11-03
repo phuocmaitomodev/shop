@@ -7,13 +7,13 @@ import {
   addCartItem,
   applyCartCoupon,
   cancelOrder,
+  createActionConfirmation,
   createOrder,
   createRefundRequest,
   getCart,
   getOrder,
   getLatestRefundRequest,
   getPaymentDemo,
-  getShippingQuote,
   lookupGuestOrder,
   removeCartCoupon,
   removeCartItem,
@@ -48,17 +48,25 @@ describe('commerce service contract', () => {
 
   it('sends checkout confirmation and idempotency fields without client totals', async () => {
     const order = {
+      id: 'order-1',
       order_code: 'DH-2026-0001',
       status: 'pending_confirmation' as const,
-      payment_method: 'online_demo' as const,
-      payment_status: 'demo_processing' as const,
+      recipient_name: 'Nguyễn An',
+      phone: '0900000000',
+      address_line: '1 Đường Mẫu',
+      ward: 'Phường 1',
+      district: 'Quận 1',
+      province: 'TP. Hồ Chí Minh',
+      note: null,
       subtotal: 249000,
       discount_amount: 0,
       shipping_fee: 30000,
       total: 279000,
       currency: 'VND' as const,
-      success_url: '/dat-hang-thanh-cong?order_code=DH-2026-0001',
-      lookup_token: 'guest-lookup-token',
+      items: [],
+      payment: { method: 'online_demo' as const, status: 'demo_processing' as const, amount: 279000, provider: 'demo' as const, is_simulation: true as const },
+      guest_lookup_token: 'guest-lookup-token',
+      created_at: '2026-11-03T00:00:00Z',
     } satisfies OrderSummary
     apiClientMock.mockResolvedValue({ data: order, meta: { request_id: 'request-order' } })
     const request = {
@@ -70,6 +78,7 @@ describe('commerce service contract', () => {
       ward: 'Phường 1',
       district: 'Quận 1',
       province: 'TP. Hồ Chí Minh',
+      note: null,
       payment_method: 'online_demo' as const,
       confirmation_token: 'confirmation-token',
     }
@@ -153,7 +162,7 @@ describe('commerce service contract', () => {
       ['/orders/DH%2F001/cancel', {
         method: 'POST',
         headers: { 'Idempotency-Key': 'cancel-key-1' },
-        body: JSON.stringify({ confirmation_token: 'confirmation-token' }),
+        body: JSON.stringify({ reason: null, confirmation_token: 'confirmation-token' }),
       }],
     ])
   })
@@ -174,27 +183,31 @@ describe('commerce service contract', () => {
         'X-Order-Lookup-Token': 'lookup-secret',
         'Idempotency-Key': 'cancel-key-1',
       },
-      body: JSON.stringify({ confirmation_token: 'confirmation-token' }),
+      body: JSON.stringify({ reason: null, confirmation_token: 'confirmation-token' }),
     })
   })
 
-  it('keeps checkout pricing reads server-owned and serializes coupon codes', async () => {
+  it('keeps checkout pricing server-owned and serializes coupon versions', async () => {
     apiClientMock
       .mockResolvedValueOnce({ data: cartFixture, meta: { request_id: 'coupon' } })
-      .mockResolvedValueOnce({
-        data: { shipping_fee: 30000, free_shipping_threshold: 500000, currency: 'VND' },
-        meta: { request_id: 'shipping' },
-      })
       .mockResolvedValueOnce({ data: cartFixture, meta: { request_id: 'coupon-remove' } })
 
-    await applyCartCoupon(' GIAM10 ')
-    await getShippingQuote()
-    await removeCartCoupon()
+    await applyCartCoupon(' GIAM10 ', 3)
+    await removeCartCoupon(4)
 
     expect(apiClientMock.mock.calls).toEqual([
-      ['/cart/coupon', { method: 'POST', body: JSON.stringify({ code: 'GIAM10' }) }],
-      ['/checkout/shipping-quote'],
-      ['/cart/coupon', { method: 'DELETE', body: JSON.stringify({}) }],
+      ['/cart/coupon', { method: 'POST', body: JSON.stringify({ code: 'GIAM10', cart_version: 3 }) }],
+      ['/cart/coupon', { method: 'DELETE', body: JSON.stringify({ cart_version: 4 }) }],
     ])
+  })
+
+  it('requests a server-bound one-time confirmation', async () => {
+    apiClientMock.mockResolvedValue({ data: { confirmation_token: 'secret', expires_at: '2026-11-03T12:00:00Z' }, meta: { request_id: 'confirmation' } })
+    const payload = { reason: null }
+    await createActionConfirmation('order_cancel', 'DH-001', payload)
+    expect(apiClientMock).toHaveBeenCalledWith('/action-confirmations', {
+      method: 'POST',
+      body: JSON.stringify({ action: 'order_cancel', resource_key: 'DH-001', payload }),
+    })
   })
 })
