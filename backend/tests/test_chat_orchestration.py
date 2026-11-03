@@ -166,6 +166,7 @@ def test_deterministic_intent_recognizes_mutations_without_executing_them() -> N
         "Đổi số lượng áo trong giỏ thành 2": "cart_update",
         "Xóa áo thun khỏi giỏ hàng": "cart_remove",
         "Tạo đơn hàng từ giỏ hiện tại": "order_create",
+        "Mua áo này luôn": "order_create",
         "Hủy đơn DH-20261103-ABC123": "order_cancel",
         "Tạo yêu cầu hoàn tiền cho đơn DH-20261103-ABC123": "refund_request",
     }
@@ -178,6 +179,9 @@ def test_deterministic_intent_recognizes_mutations_without_executing_them() -> N
         def __getattr__(self, _name):
             raise AssertionError("mutation intent must not call any dependency")
 
+        async def __call__(self, *_args, **_kwargs):
+            raise AssertionError("mutation intent must not call retrieval")
+
     for message in cases:
         result = asyncio.run(
             orchestrate_chat(
@@ -186,6 +190,8 @@ def test_deterministic_intent_recognizes_mutations_without_executing_them() -> N
                 history=(),
                 chat_provider=ExplodingDependency(),
                 embedding_provider=ExplodingDependency(),
+                retriever=ExplodingDependency(),
+                knowledge_retriever=ExplodingDependency(),
                 commerce_repository=ExplodingDependency(),
                 ownership_context=chat_module.CommerceOwnershipContext(
                     user_id=UUID("00000000-0000-0000-0000-000000000010")
@@ -232,7 +238,7 @@ def test_cart_read_uses_typed_repository_after_ownership_context() -> None:
     result = asyncio.run(
         orchestrate_chat(
             session=FakeSession(),
-            message="Cho tôi xem giỏ hàng hiện tại",
+            message="Giỏ hàng của tôi có gì?",
             history=(),
             chat_provider=ExplodingProvider(),
             embedding_provider=ExplodingProvider(),
@@ -251,7 +257,7 @@ def test_cart_read_uses_typed_repository_after_ownership_context() -> None:
 
 def test_order_lookup_passes_public_code_to_owned_typed_repository() -> None:
     context = chat_module.CommerceOwnershipContext(
-        guest_token_hash="guest-hash", order_lookup_token_hash="lookup-hash"
+        order_code="DH-20261103-ABC123", order_lookup_token_hash="lookup-hash"
     )
 
     class OrderRepository:
@@ -283,7 +289,7 @@ def test_order_lookup_passes_public_code_to_owned_typed_repository() -> None:
     result = asyncio.run(
         orchestrate_chat(
             session=FakeSession(),
-            message="Tra cứu đơn DH-20261103-ABC123",
+            message="Đơn DH-20261103-ABC123 của tôi đang ở đâu?",
             history=(),
             chat_provider=ExplodingProvider(),
             embedding_provider=ExplodingProvider(),
@@ -296,7 +302,6 @@ def test_order_lookup_passes_public_code_to_owned_typed_repository() -> None:
     assert "DH-20261103-ABC123" in result.answer
     assert "đang chuẩn bị" in result.answer.lower()
     assert "750.000 ₫" in result.answer
-    assert "guest-hash" not in result.answer
     assert "lookup-hash" not in result.answer
 
 
@@ -319,6 +324,47 @@ def test_guest_order_reads_require_lookup_evidence_before_repository_call() -> N
     )
 
     assert result.status == "insufficient_data"
+
+
+def test_guest_order_lookup_cannot_use_token_for_a_different_order_code() -> None:
+    class ExplodingRepository:
+        async def get_cart(self, *_args):
+            raise AssertionError
+
+        async def get_order(self, *_args):
+            raise AssertionError("mismatched guest order evidence must fail before SQL")
+
+        async def get_payment_demo_status(self, *_args):
+            raise AssertionError
+
+        async def get_refund_status(self, *_args):
+            raise AssertionError
+
+    context = chat_module.CommerceOwnershipContext(
+        order_code="DH-20261103-OTHER1", order_lookup_token_hash="lookup-hash"
+    )
+    result = asyncio.run(
+        orchestrate_chat(
+            session=FakeSession(),
+            message="Đơn DH-20261103-ABC123 của tôi đang ở đâu?",
+            history=(),
+            chat_provider=DeterministicChatProvider(),
+            embedding_provider=AcceptingEmbeddingProvider(),
+            commerce_repository=ExplodingRepository(),
+            ownership_context=context,
+        )
+    )
+
+    assert result.status == "insufficient_data"
+
+
+def test_authenticated_owner_cannot_supply_guest_lookup_evidence() -> None:
+    with pytest.raises(ValueError):
+        chat_module.CommerceOwnershipContext(
+            user_id=UUID("00000000-0000-0000-0000-000000000010"),
+            order_code="DH-20261103-ABC123",
+            order_lookup_token_hash="lookup-hash",
+        )
 
 
 def test_commerce_repository_validation_failure_fails_closed() -> None:
@@ -449,6 +495,62 @@ def test_refund_status_is_rendered_only_from_demo_repository_model() -> None:
     assert "đang xét duyệt" in result.answer.lower()
     assert "750.000 ₫" in result.answer
     assert str(refund_id) not in result.answer
+
+
+def test_refund_status_paraphrase_uses_only_owned_transactional_repository() -> None:
+    context = chat_module.CommerceOwnershipContext(
+        user_id=UUID("00000000-0000-0000-0000-000000000010")
+    )
+
+    class RefundRepository:
+        async def get_cart(self, *_args):
+            raise AssertionError("refund status must not query cart")
+
+        async def get_order(self, *_args):
+            raise AssertionError("refund status must not query orders")
+
+        async def get_payment_demo_status(self, *_args):
+            raise AssertionError("refund status must not query payment")
+
+        async def get_refund_status(self, received_context, order_code):
+            assert received_context is context
+            assert order_code == "DH-20261103-ABC123"
+            return chat_module.RefundDemoReadModel(
+                request_id=UUID("00000000-0000-0000-0000-000000000012"),
+                order_code=order_code,
+                status="demo_reviewing",
+                amount=750_000,
+            )
+
+    class ExplodingDependency:
+        async def plan(self, *_args):
+            raise AssertionError("refund status must not call provider or retrieval")
+
+        async def select_product_ids(self, *_args):
+            raise AssertionError("refund status must not call provider or retrieval")
+
+        async def embed(self, *_args):
+            raise AssertionError("refund status must not call provider or retrieval")
+
+        async def __call__(self, *_args, **_kwargs):
+            raise AssertionError("refund status must not call provider or retrieval")
+
+    result = asyncio.run(
+        orchestrate_chat(
+            session=FakeSession(),
+            message="Hoàn tiền đơn DH-20261103-ABC123 đến đâu rồi?",
+            history=(),
+            chat_provider=ExplodingDependency(),
+            embedding_provider=ExplodingDependency(),
+            retriever=ExplodingDependency(),
+            knowledge_retriever=ExplodingDependency(),
+            commerce_repository=RefundRepository(),
+            ownership_context=context,
+        )
+    )
+
+    assert result.status == "ok"
+    assert "hoàn tiền mô phỏng" in result.answer.lower()
 
 
 def test_commerce_read_models_reject_non_vnd_and_unknown_statuses() -> None:

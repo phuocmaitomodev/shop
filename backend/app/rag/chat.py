@@ -62,6 +62,7 @@ _ALLOWED_POLICY_CONTEXT = frozenset(
         and not line.startswith("Mộc Store,")
     ]
 )
+_ORDER_CODE = r"[A-ZĐ]{2,4}-[A-Z0-9-]{4,40}"
 
 
 @dataclass(frozen=True)
@@ -116,6 +117,7 @@ class CommerceOwnershipContext:
 
     user_id: UUID | None = None
     guest_token_hash: str | None = None
+    order_code: str | None = None
     order_lookup_token_hash: str | None = None
 
     def __post_init__(self) -> None:
@@ -129,12 +131,39 @@ class CommerceOwnershipContext:
             self.order_lookup_token_hash, str
         ):
             raise ValueError("lookup token hash must be a string")
-        if (self.user_id is None) == (self.guest_token_hash is None):
-            raise ValueError("exactly one commerce owner is required")
+        if self.order_code is not None and not isinstance(self.order_code, str):
+            raise ValueError("order code must be a string")
         if self.guest_token_hash is not None and not self.guest_token_hash.strip():
             raise ValueError("guest token hash must not be blank")
-        if self.user_id is not None and self.order_lookup_token_hash is not None:
-            raise ValueError("authenticated owners must not use guest lookup tokens")
+        if (
+            self.order_lookup_token_hash is not None
+            and not self.order_lookup_token_hash.strip()
+        ):
+            raise ValueError("lookup token hash must not be blank")
+        if self.order_code is not None and not re.fullmatch(
+            _ORDER_CODE, self.order_code, re.I
+        ):
+            raise ValueError("invalid order code")
+        authenticated = self.user_id is not None and all(
+            value is None
+            for value in (
+                self.guest_token_hash,
+                self.order_code,
+                self.order_lookup_token_hash,
+            )
+        )
+        guest_cart = self.guest_token_hash is not None and all(
+            value is None
+            for value in (self.user_id, self.order_code, self.order_lookup_token_hash)
+        )
+        guest_order_lookup = (
+            self.order_code is not None
+            and self.order_lookup_token_hash is not None
+            and self.user_id is None
+            and self.guest_token_hash is None
+        )
+        if sum((authenticated, guest_cart, guest_order_lookup)) != 1:
+            raise ValueError("invalid commerce ownership evidence")
 
 
 @dataclass(frozen=True)
@@ -459,16 +488,19 @@ _RETURN_POLICY_CONFLICTS = (
     re.compile(r"\bhàng\s+(?:sale|thanh\s+lý).{0,30}\b(?:luôn|không\s+bao\s+giờ)\b", re.I),
     re.compile(r"\b(?:tự\s+động\s+duyệt|không\s+cần.{0,30}\bliên\s+hệ)\b", re.I),
 )
-_ORDER_CODE = r"[A-ZĐ]{2,4}-[A-Z0-9-]{4,40}"
 _PRODUCT_COMPARE = re.compile(
     r"\b(?:so\s+sánh|khác\s+nhau|nên\s+chọn).{0,120}\b", re.I | re.S
 )
 _CART_READ = re.compile(
-    r"\b(?:xem|kiểm\s+tra|hiển\s+thị).{0,30}\bgiỏ\s+hàng\b", re.I | re.S
+    r"\b(?:xem|kiểm\s+tra|hiển\s+thị).{0,30}\bgiỏ\s+hàng\b"
+    r"|\bgiỏ\s+hàng\b.{0,40}\b(?:của\s+(?:tôi|mình)|có\s+gì|gồm\s+gì)\b",
+    re.I | re.S,
 )
 _ORDER_LOOKUP = re.compile(
     rf"\b(?:tra\s+cứu|xem|kiểm\s+tra|tình\s+trạng|trạng\s+thái).{{0,35}}"
-    rf"\b(?:đơn|đơn\s+hàng)\b(?:.{{0,40}}\b{_ORDER_CODE}\b)?",
+    rf"\b(?:đơn|đơn\s+hàng)\b(?:.{{0,40}}\b{_ORDER_CODE}\b)?"
+    rf"|\b(?:đơn|đơn\s+hàng)\s+{_ORDER_CODE}\b.{{0,50}}"
+    r"\b(?:đang\s+ở\s+đâu|đến\s+đâu|tới\s+đâu)\b",
     re.I | re.S,
 )
 _PAYMENT_STATUS = re.compile(
@@ -477,7 +509,8 @@ _PAYMENT_STATUS = re.compile(
     re.I | re.S,
 )
 _REFUND_STATUS = re.compile(
-    r"\b(?:hoàn\s+tiền|refund).{0,80}\b(?:trạng\s+thái|tình\s+trạng|đang\s+(?:xử\s+lý|tới))\b"
+    r"\b(?:hoàn\s+tiền|refund).{0,80}\b(?:trạng\s+thái|tình\s+trạng|"
+    r"đang\s+(?:xử\s+lý|tới)|(?:đến|tới)\s+đâu)\b"
     r"|\b(?:trạng\s+thái|tình\s+trạng).{0,60}\b(?:hoàn\s+tiền|refund)\b",
     re.I | re.S,
 )
@@ -490,7 +523,10 @@ _CART_UPDATE = re.compile(
 _CART_REMOVE = re.compile(
     r"\b(?:xóa|bỏ).{0,80}\b(?:khỏi|trong)\s+giỏ\s+hàng\b", re.I | re.S
 )
-_ORDER_CREATE = re.compile(r"\b(?:tạo|đặt)\s+đơn(?:\s+hàng)?\b", re.I)
+_ORDER_CREATE = re.compile(
+    r"\b(?:tạo|đặt)\s+đơn(?:\s+hàng)?\b|\bmua\b.{0,80}\b(?:luôn|ngay)\b",
+    re.I | re.S,
+)
 _ORDER_CANCEL = re.compile(r"\bhủy\s+đơn(?:\s+hàng)?\b", re.I)
 _REFUND_REQUEST = re.compile(
     r"\b(?:tạo|gửi|lập)\s+(?:một\s+)?yêu\s+cầu\s+hoàn\s+tiền\b", re.I
@@ -532,11 +568,15 @@ def _extract_order_code(message: str) -> str | None:
     return match.group(0).upper() if match else None
 
 
-def _has_order_lookup_evidence(context: CommerceOwnershipContext) -> bool:
+def _has_order_lookup_evidence(
+    context: CommerceOwnershipContext, order_code: str
+) -> bool:
     if context.user_id is not None:
         return True
     return bool(
-        context.order_lookup_token_hash
+        context.order_code
+        and context.order_code.upper() == order_code
+        and context.order_lookup_token_hash
         and context.order_lookup_token_hash.strip()
     )
 
@@ -1288,10 +1328,10 @@ async def orchestrate_chat(
     if intent == "order_lookup":
         if commerce_repository is None or ownership_context is None:
             return _fallback("insufficient_data")
-        if not _has_order_lookup_evidence(ownership_context):
-            return _fallback("insufficient_data")
         order_code = _extract_order_code(message)
-        if order_code is None:
+        if order_code is None or not _has_order_lookup_evidence(
+            ownership_context, order_code
+        ):
             return _fallback("insufficient_data")
         order = await _safe_commerce_read(
             commerce_repository.get_order(ownership_context, order_code)
@@ -1310,10 +1350,10 @@ async def orchestrate_chat(
     if intent == "payment_demo_status":
         if commerce_repository is None or ownership_context is None:
             return _fallback("insufficient_data")
-        if not _has_order_lookup_evidence(ownership_context):
-            return _fallback("insufficient_data")
         order_code = _extract_order_code(message)
-        if order_code is None:
+        if order_code is None or not _has_order_lookup_evidence(
+            ownership_context, order_code
+        ):
             return _fallback("insufficient_data")
         payment = await _safe_commerce_read(
             commerce_repository.get_payment_demo_status(ownership_context, order_code)
@@ -1336,10 +1376,10 @@ async def orchestrate_chat(
     if intent == "refund_status":
         if commerce_repository is None or ownership_context is None:
             return _fallback("insufficient_data")
-        if not _has_order_lookup_evidence(ownership_context):
-            return _fallback("insufficient_data")
         order_code = _extract_order_code(message)
-        if order_code is None:
+        if order_code is None or not _has_order_lookup_evidence(
+            ownership_context, order_code
+        ):
             return _fallback("insufficient_data")
         refund = await _safe_commerce_read(
             commerce_repository.get_refund_status(ownership_context, order_code)

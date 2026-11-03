@@ -14,7 +14,12 @@ from app.db.session import get_db_session
 from app.main import create_app
 from app.models.catalog import Category, Color, Product, ProductVariant, Size
 from app.models.commerce import ActionConfirmation, Order, PaymentAttempt, RefundRequest
-from app.rag.chat import ChatProduct, ChatResult, ChatSource
+from app.rag.chat import (
+    ChatProduct,
+    ChatResult,
+    ChatSource,
+    CommerceOwnershipContext,
+)
 from app.schemas.chat import ChatRequest
 
 
@@ -716,6 +721,43 @@ def test_chat_endpoint_contract_and_hydrated_response(monkeypatch) -> None:
         "title": "Áo thun đen",
     }
     assert payload["meta"]["request_id"]
+
+
+def test_chat_endpoint_forwards_locked_guest_order_lookup_evidence(monkeypatch) -> None:
+    ownership = CommerceOwnershipContext(
+        order_code="DH-20261103-ABC123", order_lookup_token_hash="lookup-hash"
+    )
+    repository = object()
+
+    async def fake_orchestrate(**kwargs):
+        assert kwargs["message"] == "Đơn DH-20261103-ABC123 của tôi đang ở đâu?"
+        assert kwargs["ownership_context"] is ownership
+        assert kwargs["commerce_repository"] is repository
+        assert ownership.guest_token_hash is None
+        return ChatResult(
+            answer="Đơn DH-20261103-ABC123 hiện đang chuẩn bị, tổng tiền 750.000 ₫.",
+            products=[],
+            sources=[],
+            status="ok",
+        )
+
+    client = _client(monkeypatch)
+    monkeypatch.setattr(chat_api, "orchestrate_chat", fake_orchestrate)
+    client.app.dependency_overrides[chat_api.get_commerce_read_repository] = (
+        lambda: repository
+    )
+    client.app.dependency_overrides[chat_api.get_commerce_ownership_context] = (
+        lambda: ownership
+    )
+
+    with client:
+        response = client.post(
+            "/api/v1/chat",
+            json={"message": "Đơn DH-20261103-ABC123 của tôi đang ở đâu?"},
+        )
+
+    assert response.status_code == 200
+    assert response.json()["data"]["status"] == "ok"
 
 
 def test_chat_endpoint_serializes_return_policy_knowledge_source(monkeypatch) -> None:
