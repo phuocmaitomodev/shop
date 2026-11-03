@@ -50,6 +50,59 @@ Refresh rotates the opaque token, extends the current session TTL, and invalidat
 
 Authentication mutations have a bounded in-process rate limit for the local single-API demo. Session/reset TTLs and rate-limit values come from environment variables. Production startup rejects `AUTH_COOKIE_SECURE=false`.
 
+## Commerce ownership foundation
+
+Migration `0006_commerce_foundation` adds carts, coupons, orders, inventory
+movements, payment/refund demo records, idempotency records and one-time action
+confirmations. Guest credentials are opaque values sent only in HttpOnly,
+SameSite=Lax cookies or the dedicated lookup header; PostgreSQL stores SHA-256
+hashes and expiry timestamps, never raw tokens or idempotency keys. Payment and
+refund providers are fixed to the local `demo` state model and amounts use integer
+VND.
+
+To roll back only this foundation on a disposable database, run:
+
+```bash
+docker compose run --rm api alembic downgrade 0005_rag_chunks
+```
+
+This deletes all commerce tables and their data. For a full local reset, use
+`docker compose down --volumes`, recreate `db`, then run `alembic upgrade head`.
+Do not use either destructive command on a shared database.
+
+### Cart, pricing and coupon API
+
+Migration `0007_cart_pricing` adds the applied coupon reference and the integer-VND
+price snapshot used to detect `PRICE_CHANGED`. The public `/api/v1/cart` endpoints
+support guest and authenticated carts, item add/update/delete, and coupon
+apply/remove. Guest access uses the `GUEST_COOKIE_NAME` HttpOnly cookie; only its
+SHA-256 hash is persisted. Login claims or deterministically merges that guest cart
+in the same transaction and then clears the guest cookie.
+
+Every cart response hydrates current product/variant/color/size/stock and price from
+PostgreSQL, calculates subtotal, discount, shipping and total on the server, and
+returns integer VND. `PATCH`/`DELETE` and coupon mutations require the latest
+`cart_version`; stale requests return `CART_VERSION_CONFLICT`. Shipping uses
+`SHIPPING_FLAT_FEE` and `FREE_SHIPPING_THRESHOLD`. Cart stock checks do not reserve
+inventory; checkout remains responsible for locking and revalidating stock.
+
+### Order, payment and refund demo API
+
+`POST /api/v1/orders` khóa giỏ hàng/variant, tính lại giá, tồn kho, coupon và
+phí giao hàng từ PostgreSQL rồi lưu snapshot đơn hàng và trừ tồn trong cùng
+transaction. Tạo đơn, hủy đơn và tạo yêu cầu hoàn tiền đều cần
+`Idempotency-Key` cùng confirmation token một lần (TTL tối đa 5 phút). Guest
+nhận lookup token đúng một lần; database chỉ lưu SHA-256 hash và các lần đọc
+sau gửi token qua `X-Order-Lookup-Token`, không đặt token vào URL.
+
+Các endpoint gồm `GET /orders/{order_code}`, `GET /orders/lookup`,
+`POST /orders/{order_code}/cancel`, `GET /orders/{order_code}/payment`,
+`POST /orders/{order_code}/refund-requests` và
+`GET /orders/{order_code}/refund-requests/latest`. Hủy chỉ hợp lệ ở
+`pending_confirmation|confirmed` và hoàn tồn đúng một lần. Payment/refund luôn
+gắn `provider=demo`, `is_simulation=true`, amount integer VND do server lấy từ
+order; không có lời gọi gateway, ngân hàng hoặc credential provider.
+
 The local password-reset demo sends no email and never returns the reset token from an API response. The `forgot-password` response is identical for existing and unknown email addresses. After requesting a reset for a known local demo account, retrieve its short-lived token from the trusted local container shell:
 
 ```bash

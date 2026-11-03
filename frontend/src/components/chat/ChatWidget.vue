@@ -1,14 +1,19 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 
-import { sendChatMessage } from '../../services/chat'
-import type { ChatHistoryItem, ChatProduct, ChatSource, ChatStatus } from '../../types/chat'
+import { confirmChatAction, sendChatMessage } from '../../services/chat'
+import { clearPendingChatAction, pendingChatAction } from '../../stores/chat-action'
+import type { ChatHistoryItem, ChatProduct, ChatProposedAction, ChatSource, ChatStatus } from '../../types/chat'
 import ChatProductCard from './ChatProductCard.vue'
 
 interface ChatMessage extends ChatHistoryItem {
   products?: ChatProduct[]
   sources?: ChatSource[]
   status?: ChatStatus
+  proposedAction?: ChatProposedAction | null
+  actionError?: string
+  lookupToken?: string
+  confirmationAttempt?: { clientMessageId: string; idempotencyKey: string }
 }
 
 const HISTORY_LIMIT = 6
@@ -18,6 +23,9 @@ const toggleButton = ref<HTMLButtonElement | null>(null)
 const message = ref('')
 const messages = ref<ChatMessage[]>([])
 const loading = ref(false)
+const confirming = ref(false)
+const currentTime = ref(Date.now())
+let clockTimer: ReturnType<typeof setInterval> | undefined
 const errorMessage = ref('')
 const canSend = computed(() => Boolean(message.value.trim()) && !loading.value)
 const statusLabels: Record<ChatStatus, string> = {
@@ -25,6 +33,14 @@ const statusLabels: Record<ChatStatus, string> = {
   insufficient_data: 'Chưa đủ dữ liệu để tư vấn',
   out_of_scope: 'Ngoài phạm vi hỗ trợ sản phẩm',
   provider_unavailable: 'Dịch vụ tư vấn tạm thời không khả dụng',
+}
+const actionLabels: Record<ChatProposedAction['action'], string> = {
+  cart_add: 'Thêm vào giỏ hàng',
+  cart_update: 'Cập nhật giỏ hàng',
+  cart_remove: 'Xóa khỏi giỏ hàng',
+  order_create: 'Tạo đơn hàng (thanh toán mô phỏng nếu chọn online)',
+  order_cancel: 'Hủy đơn hàng',
+  refund_request: 'Yêu cầu hoàn tiền mô phỏng',
 }
 
 const open = async () => {
@@ -64,7 +80,14 @@ const submitMessage = async () => {
   loading.value = true
 
   try {
-    const response = await sendChatMessage(content, history)
+    const requestedAction = pendingChatAction.value
+    const response = requestedAction
+      ? await sendChatMessage(content, history, {
+          actionContext: requestedAction.actionContext,
+          lookupToken: requestedAction.lookupToken,
+        })
+      : await sendChatMessage(content, history)
+    clearPendingChatAction()
     messages.value = keepBounded([
       ...messages.value,
       {
@@ -73,6 +96,8 @@ const submitMessage = async () => {
         products: response.products,
         sources: response.sources.filter((source) => source.source_type === 'knowledge'),
         status: response.status,
+        proposedAction: response.proposed_action,
+        lookupToken: requestedAction?.lookupToken,
       },
     ])
   } catch {
@@ -81,6 +106,111 @@ const submitMessage = async () => {
     loading.value = false
     await nextTick()
     input.value?.focus()
+  }
+}
+
+const proposalExpired = (proposal: ChatProposedAction) => {
+  const expiresAt = new Date(proposal.expires_at).getTime()
+  return !Number.isFinite(expiresAt) || expiresAt <= currentTime.value
+}
+
+const confirmationDisabled = (item: ChatMessage) => Boolean(
+  item.proposedAction
+  && proposalExpired(item.proposedAction)
+  && !item.confirmationAttempt,
+)
+
+const cancelProposal = (item: ChatMessage) => {
+  item.proposedAction = null
+  item.actionError = 'Bạn đã hủy đề xuất. Không có thay đổi nào được thực hiện.'
+}
+
+const confirmProposal = async (item: ChatMessage) => {
+  const proposal = item.proposedAction
+  if (!proposal || confirming.value) return
+  if (proposalExpired(proposal) && !item.confirmationAttempt) {
+    item.actionError = 'Xác nhận đã hết hạn. Hãy gửi lại yêu cầu để lấy đề xuất mới.'
+    return
+  }
+
+  confirming.value = true
+  item.actionError = ''
+  try {
+    const attempt = item.confirmationAttempt ?? {
+      clientMessageId: crypto.randomUUID(),
+      idempotencyKey: `chat-action-${crypto.randomUUID()}`,
+    }
+    item.confirmationAttempt = attempt
+    const response = item.lookupToken
+      ? await confirmChatAction(
+          proposal.confirmation_token,
+          attempt.clientMessageId,
+          attempt.idempotencyKey,
+          item.lookupToken,
+        )
+      : await confirmChatAction(
+          proposal.confirmation_token,
+          attempt.clientMessageId,
+          attempt.idempotencyKey,
+        )
+    item.proposedAction = null
+    item.confirmationAttempt = undefined
+    messages.value = keepBounded([
+      ...messages.value,
+      {
+        role: 'assistant',
+        content: response.answer,
+        products: response.products,
+        sources: response.sources.filter((source) => source.source_type === 'knowledge'),
+        status: response.status,
+        proposedAction: response.proposed_action,
+      },
+    ])
+  } catch (error) {
+    const code = (
+      typeof error === 'object'
+      && error !== null
+      && 'payload' in error
+      && typeof error.payload === 'object'
+      && error.payload !== null
+      && 'error' in error.payload
+      && typeof error.payload.error === 'object'
+      && error.payload.error !== null
+      && 'code' in error.payload.error
+    ) ? String(error.payload.error.code) : null
+    const status = (
+      typeof error === 'object'
+      && error !== null
+      && 'status' in error
+      && typeof error.status === 'number'
+    ) ? error.status : null
+    const terminalCodes = new Set([
+      'CHAT_ACTION_UNAVAILABLE',
+      'CONFIRMATION_ALREADY_USED',
+      'CONFIRMATION_EXPIRED',
+      'CONFIRMATION_INVALID',
+      'IDEMPOTENCY_KEY_REUSED',
+      'CART_VERSION_CONFLICT',
+      'ORDER_STATUS_NOT_CANCELLABLE',
+      'OUT_OF_STOCK',
+      'PRICE_CHANGED',
+    ])
+    const terminalClientError = status !== null
+      && status >= 400
+      && status < 500
+      && status !== 408
+      && status !== 429
+    if ((code && terminalCodes.has(code)) || terminalClientError) {
+      item.proposedAction = null
+      item.confirmationAttempt = undefined
+      item.actionError = 'Không thể xác nhận vì đề xuất đã dùng, hết hạn hoặc dữ liệu đã thay đổi. Hãy tải lại trạng thái và tạo đề xuất mới.'
+    } else if (status === 429) {
+      item.actionError = 'Đang có quá nhiều yêu cầu. Vui lòng chờ một lúc rồi thử lại với cùng mã yêu cầu.'
+    } else {
+      item.actionError = 'Chưa nhận được kết quả xác nhận. Bạn có thể thử lại an toàn với cùng mã yêu cầu.'
+    }
+  } finally {
+    confirming.value = false
   }
 }
 
@@ -96,8 +226,21 @@ const submitSuggestion = async (content: string) => {
   await submitMessage()
 }
 
-onMounted(() => document.addEventListener('keydown', handleEscape))
-onBeforeUnmount(() => document.removeEventListener('keydown', handleEscape))
+onMounted(() => {
+  document.addEventListener('keydown', handleEscape)
+  clockTimer = setInterval(() => {
+    currentTime.value = Date.now()
+  }, 500)
+})
+onBeforeUnmount(() => {
+  document.removeEventListener('keydown', handleEscape)
+  if (clockTimer) clearInterval(clockTimer)
+})
+watch(pendingChatAction, async (request) => {
+  if (!request) return
+  message.value = request.prompt
+  await open()
+})
 </script>
 
 <template>
@@ -154,6 +297,41 @@ onBeforeUnmount(() => document.removeEventListener('keydown', handleEscape))
               <li v-for="source in item.sources" :key="source.source_id">{{ source.title }}</li>
             </ul>
           </div>
+          <section
+            v-if="item.proposedAction"
+            class="chat-widget__proposal"
+            data-testid="chat-proposed-action"
+            aria-label="Xác nhận thao tác được đề xuất"
+          >
+            <strong>{{ actionLabels[item.proposedAction.action] }}</strong>
+            <p>{{ item.proposedAction.summary }}</p>
+            <p>Mã tài nguyên: <b>{{ item.proposedAction.resource_code }}</b></p>
+            <p v-if="proposalExpired(item.proposedAction) && !item.confirmationAttempt" role="alert">
+              Xác nhận đã hết hạn. Hãy gửi lại yêu cầu để lấy đề xuất mới.
+            </p>
+            <p v-else-if="proposalExpired(item.proposedAction)" role="status">
+              Đề xuất ban đầu đã hết hạn; lần thử đang xử lý vẫn dùng lại cùng mã yêu cầu an toàn.
+            </p>
+            <div class="chat-widget__proposal-actions">
+              <button
+                type="button"
+                data-testid="chat-action-confirm"
+                :disabled="confirming || confirmationDisabled(item)"
+                @click="confirmProposal(item)"
+              >
+                {{ confirming ? 'Đang xác nhận…' : 'Xác nhận' }}
+              </button>
+              <button
+                type="button"
+                data-testid="chat-action-cancel"
+                :disabled="confirming"
+                @click="cancelProposal(item)"
+              >
+                Hủy
+              </button>
+            </div>
+          </section>
+          <p v-if="item.actionError" class="chat-widget__error" role="alert">{{ item.actionError }}</p>
         </article>
         <p v-if="loading" class="chat-widget__loading" role="status">Đang tìm sản phẩm…</p>
         <p v-if="errorMessage" class="chat-widget__error" role="alert">{{ errorMessage }}</p>
@@ -203,8 +381,9 @@ onBeforeUnmount(() => document.removeEventListener('keydown', handleEscape))
 <style scoped>
 .chat-widget {
   position: fixed;
+  top: max(10.5rem, env(safe-area-inset-top));
   right: max(var(--space-4), env(safe-area-inset-right));
-  bottom: max(var(--space-4), env(safe-area-inset-bottom));
+  bottom: auto;
   z-index: 30;
   display: grid;
   justify-items: end;
@@ -241,7 +420,7 @@ onBeforeUnmount(() => document.removeEventListener('keydown', handleEscape))
 .chat-widget__panel {
   display: grid;
   width: min(24rem, calc(100vw - 2rem));
-  max-height: min(36rem, calc(100dvh - 7rem));
+  max-height: min(36rem, calc(100dvh - 15rem));
   overflow: hidden;
   grid-template-rows: auto minmax(0, 1fr) auto;
   border: 1px solid var(--color-border);
@@ -342,6 +521,37 @@ onBeforeUnmount(() => document.removeEventListener('keydown', handleEscape))
   font-weight: var(--font-weight-bold);
 }
 
+.chat-widget__proposal {
+  display: grid;
+  gap: var(--space-2);
+  margin-top: var(--space-3);
+  padding: var(--space-3);
+  border: 1px solid var(--color-accent);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+}
+
+.chat-widget__proposal-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.chat-widget__proposal-actions button {
+  min-height: 2.75rem;
+  padding-inline: var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-pill);
+  background: var(--color-surface-soft);
+  color: var(--color-ink);
+  font-weight: var(--font-weight-bold);
+}
+
+.chat-widget__proposal-actions button:first-child {
+  background: var(--color-accent);
+  color: var(--color-surface);
+}
+
 .chat-widget__loading {
   font-size: var(--font-size-sm);
 }
@@ -384,8 +594,24 @@ onBeforeUnmount(() => document.removeEventListener('keydown', handleEscape))
 
 @media (min-width: 48rem) {
   .chat-widget {
+    top: auto;
     right: var(--space-6);
     bottom: var(--space-6);
+  }
+
+  .chat-widget__panel {
+    max-height: min(36rem, calc(100dvh - 7rem));
+  }
+}
+
+@media (max-height: 30rem) {
+  .chat-widget {
+    top: var(--space-2);
+    bottom: var(--space-2);
+  }
+
+  .chat-widget__panel {
+    max-height: calc(100dvh - 4.5rem);
   }
 }
 </style>

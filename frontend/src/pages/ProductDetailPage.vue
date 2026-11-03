@@ -7,6 +7,7 @@ import ProductPrice from '../components/catalog/ProductPrice.vue'
 import ProductStockStatus from '../components/catalog/ProductStockStatus.vue'
 import ProductVariantSelector from '../components/catalog/ProductVariantSelector.vue'
 import { getProduct } from '../services/catalog'
+import { addCartItem } from '../services/commerce'
 import type { ProductDetail, ProductImage as ProductImageData, ProductVariant } from '../types/catalog'
 
 const route = useRoute()
@@ -15,6 +16,10 @@ const failed = ref(false)
 const notFound = ref(false)
 const product = ref<ProductDetail | null>(null)
 const selectedVariantId = ref<string | null>(null)
+const quantity = ref<number | string>(1)
+const adding = ref(false)
+const cartMessage = ref('')
+const cartError = ref('')
 const images = computed<ProductImageData[]>(() => (
   Array.isArray(product.value?.images) ? product.value.images : []
 ))
@@ -43,7 +48,21 @@ const effectivePrice = computed(() => (
   typeof product.value?.effective_price === 'number' ? product.value.effective_price : Number.NaN
 ))
 const productInStock = computed(() => product.value?.in_stock === true)
+const selectedVariant = computed(() => variants.value.find((variant) => variant.id === selectedVariantId.value) ?? null)
 let requestSequence = 0
+
+const addToCart = async () => {
+  cartMessage.value = ''
+  cartError.value = ''
+  if (!selectedVariant.value) { cartError.value = 'Vui lòng chọn biến thể còn hàng.'; return }
+  if (typeof quantity.value !== 'number' || !Number.isInteger(quantity.value) || quantity.value < 1) { cartError.value = 'Số lượng phải là số nguyên từ 1 trở lên.'; return }
+  if (quantity.value > selectedVariant.value.stock_quantity) { cartError.value = `Biến thể này chỉ còn ${selectedVariant.value.stock_quantity} sản phẩm.`; return }
+  adding.value = true
+  try {
+    await addCartItem({ variant_id: selectedVariant.value.id, quantity: quantity.value })
+    cartMessage.value = 'Đã thêm vào giỏ hàng.'
+  } catch { cartError.value = 'Không thể thêm vào giỏ. Tồn kho có thể vừa thay đổi; vui lòng thử lại.' } finally { adding.value = false }
+}
 
 const loadProduct = async () => {
   const requestId = ++requestSequence
@@ -125,6 +144,13 @@ watch(() => route.params.slug, () => {
           v-model="selectedVariantId"
           :variants="variants"
         />
+        <div class="add-to-cart">
+          <label for="add-quantity">Số lượng</label>
+          <input id="add-quantity" v-model.number="quantity" type="number" min="1" :max="selectedVariant?.stock_quantity" aria-label="Số lượng thêm vào giỏ">
+          <button data-testid="add-to-cart" type="button" :disabled="adding || !selectedVariant" @click="addToCart">{{ adding ? 'Đang thêm…' : 'Thêm vào giỏ hàng' }}</button>
+        </div>
+        <p v-if="cartError" role="alert">{{ cartError }}</p>
+        <p v-if="cartMessage" role="status" data-testid="cart-message">{{ cartMessage }}</p>
       </div>
     </div>
   </section>
@@ -196,6 +222,11 @@ watch(() => route.params.slug, () => {
 [data-testid='overall-stock'] {
   display: inline-flex;
 }
+
+.add-to-cart { display: flex; flex-wrap: wrap; align-items: end; gap: var(--space-3); }
+.add-to-cart label { width: 100%; font-weight: var(--font-weight-bold); }
+.add-to-cart input { width: 6rem; min-height: 2.75rem; padding: var(--space-2); }
+.add-to-cart button { min-height: 2.75rem; padding-inline: var(--space-4); border: 0; border-radius: var(--radius-pill); background: var(--color-accent); color: white; font-weight: var(--font-weight-bold); }
 
 @media (min-width: 48rem) {
   .product-detail {

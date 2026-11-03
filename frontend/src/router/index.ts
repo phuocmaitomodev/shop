@@ -16,6 +16,7 @@ const placeholder = (path: string, name: string, title: string, description: str
   meta: { title, description },
 })
 
+
 export const routes: RouteRecordRaw[] = [
   { path: '/', name: 'home', component: HomePage, meta: { title: 'Trang chủ' } },
   {
@@ -31,16 +32,20 @@ export const routes: RouteRecordRaw[] = [
     component: () => import('../pages/ProductDetailPage.vue'),
     meta: { title: 'Chi tiết sản phẩm' },
   },
-  placeholder('/gio-hang', 'cart', 'Giỏ hàng', 'Quản lý sản phẩm và số lượng trong giỏ hàng sẽ được triển khai ở FE-04.'),
-  placeholder('/thanh-toan', 'checkout', 'Thanh toán', 'Quy trình đặt hàng sáu bước sẽ được triển khai ở FE-05.'),
-  placeholder('/dat-hang-thanh-cong', 'order-success', 'Đặt hàng thành công', 'Trang xác nhận và mã đơn hàng sẽ được triển khai ở FE-05.'),
+  { path: '/gio-hang', name: 'cart', component: () => import('../pages/CartPage.vue'), meta: { title: 'Giỏ hàng' } },
+  { path: '/thanh-toan', name: 'checkout', component: () => import('../pages/CheckoutPage.vue'), meta: { title: 'Thanh toán' } },
+  { path: '/dat-hang-thanh-cong', name: 'order-success', component: () => import('../pages/OrderSuccessPage.vue'), meta: { title: 'Đặt hàng thành công' } },
+  { path: '/tra-cuu-don-hang', name: 'order-lookup', component: () => import('../pages/OrderLookupPage.vue'), meta: { title: 'Tra cứu đơn hàng' } },
+  { path: '/don-hang/:orderCode', name: 'order-detail', component: () => import('../pages/OrderDetailPage.vue'), meta: { title: 'Chi tiết đơn hàng' } },
+  { path: '/don-hang/:orderCode/thanh-toan-demo', name: 'payment-demo', component: () => import('../pages/OrderDetailPage.vue'), meta: { title: 'Trạng thái thanh toán demo' } },
+  { path: '/don-hang/:orderCode/hoan-tien-demo', name: 'refund-demo', component: () => import('../pages/OrderDetailPage.vue'), meta: { title: 'Yêu cầu hoàn tiền mô phỏng' } },
   placeholder('/dang-nhap', 'login', 'Đăng nhập', 'Đăng nhập bằng email và mật khẩu sẽ được triển khai ở FE-02.'),
   placeholder('/dang-ky', 'register', 'Đăng ký', 'Tạo tài khoản khách hàng sẽ được triển khai ở FE-02.'),
   placeholder('/quen-mat-khau', 'forgot-password', 'Quên mật khẩu', 'Luồng đặt lại mật khẩu demo sẽ được triển khai ở FE-02.'),
   placeholder('/dat-lai-mat-khau', 'reset-password', 'Đặt lại mật khẩu', 'Biểu mẫu đặt lại mật khẩu sẽ được triển khai ở FE-02.'),
   placeholder('/tai-khoan', 'account', 'Tài khoản', 'Thông tin tài khoản khách hàng sẽ được triển khai ở FE-02.'),
   placeholder('/tai-khoan/don-hang', 'account-orders', 'Đơn hàng của tôi', 'Lịch sử đơn hàng sẽ được triển khai ở FE-02 và FE-05.'),
-  placeholder('/tai-khoan/don-hang/:orderCode', 'account-order-detail', 'Chi tiết đơn hàng', 'Chi tiết và thao tác hủy đơn hợp lệ sẽ được triển khai ở FE-05.'),
+  { path: '/tai-khoan/don-hang/:orderCode', name: 'account-order-detail', component: () => import('../pages/OrderDetailPage.vue'), meta: { title: 'Chi tiết đơn hàng' } },
   placeholder('/admin', 'admin-dashboard', 'Quản trị cửa hàng', 'Dashboard quản trị sẽ được triển khai ở FE-06.'),
   placeholder('/admin/san-pham', 'admin-products', 'Quản lý sản phẩm', 'CRUD sản phẩm và biến thể sẽ được triển khai ở FE-06.'),
   placeholder('/admin/don-hang', 'admin-orders', 'Quản lý đơn hàng', 'Quản lý trạng thái đơn hàng sẽ được triển khai ở FE-06.'),

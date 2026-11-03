@@ -4,13 +4,18 @@ import { describe, expect, it, vi } from 'vitest'
 
 import ProductDetailPage from '../pages/ProductDetailPage.vue'
 import { getProduct } from '../services/catalog'
+import { addCartItem } from '../services/commerce'
 import type { ProductDetail } from '../types/catalog'
 
 vi.mock('../services/catalog', () => ({
   getProduct: vi.fn(),
 }))
+vi.mock('../services/commerce', () => ({
+  addCartItem: vi.fn(),
+}))
 
 const getProductMock = vi.mocked(getProduct)
+const addCartItemMock = vi.mocked(addCartItem)
 
 const product: ProductDetail = {
   id: 'product-1',
@@ -119,6 +124,20 @@ describe('ProductDetailPage', () => {
 
     expect(wrapper.get('.variant-selector [role="status"]').text()).toBe('Còn 2 sản phẩm')
     expect(wrapper.get('[data-testid="effective-price"]').text()).toBe('249.000 ₫')
+  })
+
+  it('adds the selected variant and bounded quantity to the cart', async () => {
+    getProductMock.mockResolvedValue(product)
+    addCartItemMock.mockResolvedValue({ items: [] } as never)
+    const wrapper = await mountPage()
+    await flushPromises()
+
+    await wrapper.get('[aria-label="Số lượng thêm vào giỏ"]').setValue(3)
+    await wrapper.get('[data-testid="add-to-cart"]').trigger('click')
+    await flushPromises()
+
+    expect(addCartItemMock).toHaveBeenCalledWith({ variant_id: 'variant-black-m', quantity: 3 })
+    expect(wrapper.get('[data-testid="cart-message"]').text()).toContain('Đã thêm vào giỏ hàng')
   })
 
   it('shows a recoverable error and retries the request', async () => {

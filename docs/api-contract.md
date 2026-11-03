@@ -1,6 +1,10 @@
 # API contract frontend ↔ backend
 
-> **Contract MVP hiện hành:** Surface bắt buộc được thu gọn còn `GET /api/v1/products`, `GET /api/v1/products/{slug}` và `POST /api/v1/chat` như định nghĩa trong [`mvp-product-rag-scope.md`](mvp-product-rag-scope.md). Vertical slice `return_policy` mở rộng chính `POST /chat`, không thêm endpoint hoặc khôi phục knowledge/admin/support tổng quát. Các nhóm API auth/cart/order/admin/support dưới đây được giữ làm contract mục tiêu lịch sử và không thuộc release gate MVP.
+> **Contract hiện hành:** Yêu cầu trực tiếp ngày 2026-11-03 mở lại commerce
+> và tám nhóm chatbot. [`commerce-chatbot-expansion-contract.md`](commerce-chatbot-expansion-contract.md)
+> khóa surface cart/order/payment demo/refund demo, ownership, idempotency và
+> confirmation. Tài liệu `mvp-product-rag-scope.md` chỉ còn là baseline catalog
+> và grounding ở phần không xung đột.
 
 ## 1. Quy ước chung
 
@@ -91,6 +95,11 @@ Product card tối thiểu:
 
 ## 4. Cart, coupon và checkout
 
+Các mutation tạo đơn/hủy/hoàn tiền mô phỏng dùng `Idempotency-Key`. Mutation
+do chat khởi phát còn cần confirmation token một lần, bind owner/action/resource/
+payload và được server revalidate. Guest ownership dùng opaque token hash;
+không dùng resource UUID hoặc order code đơn lẻ làm quyền truy cập.
+
 | Method | Path | Mục đích |
 |---|---|---|
 | GET | `/cart` | Cart theo user hoặc guest session |
@@ -102,6 +111,16 @@ Product card tối thiểu:
 | GET | `/checkout/shipping-quote` | Phí cố định/miễn phí theo subtotal |
 | POST | `/orders` | Revalidate và tạo order |
 | GET | `/orders/lookup` | Guest tra cứu bằng order code + verification token phù hợp |
+| GET | `/orders/{order_code}` | Chi tiết đơn của customer owner |
+| POST | `/orders/{order_code}/cancel` | Hủy đơn đủ điều kiện, confirmation + idempotency |
+| GET | `/orders/{order_code}/payment` | Trạng thái payment mô phỏng |
+| POST | `/orders/{order_code}/refund-requests` | Tạo yêu cầu refund mô phỏng |
+| GET | `/orders/{order_code}/refund-requests/latest` | Yêu cầu refund mới nhất |
+
+Lookup token gửi qua `X-Order-Lookup-Token`, không đặt vào URL. Bổ sung
+`GET /orders/{order_code}/payment`, `POST /orders/{order_code}/refund-requests`
+và `GET /orders/{order_code}/refund-requests/latest`; tất cả kiểm ownership.
+Payment/refund chỉ mô phỏng và amount luôn do server lấy từ order.
 
 Request tạo order chứa `cart_id`, `cart_version`, recipient/address, `payment_method` (`cod` hoặc `online_demo`) và coupon code nếu có. Không nhận totals do client làm nguồn sự thật. Response trả snapshot totals, `order_code`, status, payment simulation status và URL trang thành công.
 
@@ -120,8 +139,14 @@ API trả chi tiết item/giá mới để frontend yêu cầu user xác nhận 
 ### Contract MVP hiện hành
 
 `POST /chat` là endpoint chat công khai, không lưu transcript. Request gồm
-`message` (1–1000 ký tự, không chỉ có khoảng trắng) và tối đa 6 phần tử `history`;
-mỗi phần tử có `role` (`user` hoặc `assistant`) và `content` 1–1000 ký tự.
+`message` (1–1000 ký tự, không chỉ có khoảng trắng), tối đa 6 phần tử `history`
+và `action_context` typed nullable; mỗi history item có `role` (`user` hoặc
+`assistant`) và `content` 1–1000 ký tự. `action_context` là discriminated union
+theo mục 4.4 của
+[`commerce-chatbot-expansion-contract.md`](commerce-chatbot-expansion-contract.md):
+UI/server state phải cung cấp exact variant/cart item/cart/order IDs cùng version,
+recipient/address/payment/reason cần cho action. Prose/model/history không được tạo
+ID hoặc amount; request không nhận amount/totals/status/tool/endpoint.
 
 Response dùng success envelope và trả `answer`, `products`, `sources`, `status`.
 `status` thuộc `ok`, `insufficient_data`, `out_of_scope`, `provider_unavailable`.
@@ -131,10 +156,28 @@ lưu lịch sử. Các endpoint session/support bên dưới là contract lịch
 Endpoint áp dụng rate limit theo IP và trả error envelope `RATE_LIMITED` với HTTP
 429 khi vượt ngưỡng cấu hình.
 
-Intent nội bộ có allow-list đóng `product_search | return_policy | out_of_scope`.
-Intent không phải field response công khai; câu hỏi policy không được đi qua product
-selector, còn product query hiện hành không được đổi semantics. Câu follow-up chỉ
-được phân loại `return_policy` khi history giới hạn cung cấp ngữ cảnh policy rõ ràng.
+Intent nội bộ có allow-list đóng theo mục 2 của
+[`commerce-chatbot-expansion-contract.md`](commerce-chatbot-expansion-contract.md),
+bao phủ policy, product/compare, cart, order/payment/cancel, lookup/refund,
+greeting, out-of-scope và injection.
+Intent không phải field response công khai; policy không đi qua product selector
+và mọi dữ liệu commerce động phải hydrate từ SQL sau authorization. Chat chỉ đề
+xuất side effect bằng `proposed_action`; không mutation trong cùng lượt đề xuất.
+Thiếu/ambiguous `action_context` không được suy ra từ prose: response hỏi làm rõ
+hoặc fail closed và `proposed_action=null`. Production phải wire DB-backed
+ownership/action adapter để issue/consume one-time token, reauthorize/revalidate và
+gọi cùng reviewed commerce use-case của API trực tiếp. Test double/no-op/`None`
+không phải implementation hợp lệ.
+
+Lượt đề xuất gửi `action_context` và không gửi `confirmation_token`. Lượt xác nhận
+gửi `confirmation_token` server-issued cùng `client_message_id` UUID, không gửi lại
+`action_context`, và bắt buộc header `Idempotency-Key` (8–200 ký tự). Token được lưu
+dưới dạng hash, gắn owner/session/action/resource/payload tối đa 5 phút và chỉ consume
+nguyên tử một lần; retry cùng key/payload trả lại kết quả cũ, còn key xung đột payload
+trả `IDEMPOTENCY_KEY_REUSED`.
+Guest đã mất/hết hạn cookie cart gửi `X-Order-Lookup-Token` (20–200 ký tự) trong cả
+lượt đề xuất và xác nhận `order_cancel`/`refund_request`; session authenticated luôn
+có ưu tiên và lookup token không được vượt ownership của user khác.
 
 Mỗi phần tử `sources` dùng schema additive sau:
 

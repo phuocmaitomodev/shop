@@ -9,6 +9,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.dependencies import get_current_user, session_cookie
+from app.api.v1.cart import merge_guest_cart_on_login
 from app.core.config import get_settings
 from app.core.errors import AppError
 from app.core.rate_limit import enforce_auth_rate_limit
@@ -113,6 +114,11 @@ async def login(
             user_agent=(request.headers.get("user-agent") or "")[:512] or None,
         )
     )
+    await merge_guest_cart_on_login(
+        session,
+        user_id=user.id,
+        guest_token=request.cookies.get(settings.guest_cookie_name),
+    )
     await session.commit()
     response.set_cookie(
         key=settings.auth_cookie_name,
@@ -123,6 +129,7 @@ async def login(
         samesite="lax",
         path="/",
     )
+    response.delete_cookie(settings.guest_cookie_name, path="/")
     return {
         "data": UserResponse.model_validate(user),
         "meta": {"request_id": request.state.request_id},
