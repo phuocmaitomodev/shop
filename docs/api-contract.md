@@ -169,6 +169,13 @@ ownership/action adapter để issue/consume one-time token, reauthorize/revalid
 gọi cùng reviewed commerce use-case của API trực tiếp. Test double/no-op/`None`
 không phải implementation hợp lệ.
 
+Lượt đề xuất gửi `action_context` và không gửi `confirmation_token`. Lượt xác nhận
+gửi `confirmation_token` server-issued cùng `client_message_id` UUID, không gửi lại
+`action_context`, và bắt buộc header `Idempotency-Key` (8–200 ký tự). Token được lưu
+dưới dạng hash, gắn owner/session/action/resource/payload tối đa 5 phút và chỉ consume
+nguyên tử một lần; retry cùng key/payload trả lại kết quả cũ, còn key xung đột payload
+trả `IDEMPOTENCY_KEY_REUSED`.
+
 Mỗi phần tử `sources` dùng schema additive sau:
 
 ```json

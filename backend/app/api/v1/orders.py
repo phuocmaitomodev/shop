@@ -308,6 +308,7 @@ async def create_action_confirmation(
             session_key=_session_key(request, owner),
             action=payload.action,
             resource_key=payload.resource_key,
+            payload_json=confirmation_payload,
             payload_hash=_canonical_hash(confirmation_payload),
             token_hash=token.digest,
             expires_at=token.expires_at,

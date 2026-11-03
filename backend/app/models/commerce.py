@@ -594,6 +594,7 @@ class ActionConfirmation(CommerceTimestampMixin, Base):
     session_key: Mapped[str] = mapped_column(String(160))
     action: Mapped[str] = mapped_column(String(40))
     resource_key: Mapped[str] = mapped_column(String(160))
+    payload_json: Mapped[dict] = mapped_column(JSON)
     payload_hash: Mapped[str] = mapped_column(String(64))
     token_hash: Mapped[str] = mapped_column(String(64), unique=True)
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))

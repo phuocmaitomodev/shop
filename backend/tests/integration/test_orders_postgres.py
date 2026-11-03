@@ -18,6 +18,9 @@ from app.main import create_app
 from app.models.catalog import Category, Color, Product, ProductVariant, Size
 from app.models.commerce import (
     ActionConfirmation,
+    Cart,
+    CartItem,
+    IdempotencyRecord,
     InventoryMovement,
     Order,
     PaymentAttempt,
@@ -647,5 +650,109 @@ def test_postgres_order_mutations_fail_closed_at_adversarial_boundaries(
         assert payment.json()["data"]["provider"] == "demo"
         assert payment.json()["data"]["amount"] == order["total"]
 
+    application.dependency_overrides.clear()
+    asyncio.run(api_engine.dispose())
+
+
+def test_postgres_chat_confirmation_concurrent_consume_is_idempotent() -> None:
+    assert MIGRATION_DATABASE_URL is not None
+    require_fresh_migrated_database(MIGRATION_DATABASE_URL)
+
+    async def seed() -> str:
+        engine = create_async_engine(MIGRATION_DATABASE_URL)
+        session_factory = async_sessionmaker(engine, expire_on_commit=False)
+        suffix = uuid4().hex
+        async with session_factory() as session:
+            category = Category(name="Chat PG", slug=f"chat-pg-{suffix}")
+            color = Color(name="Đen chat PG", slug=f"chat-black-{suffix}")
+            size = Size(code=f"CH-{suffix[:8]}", name="Chat PG")
+            product = Product(
+                category=category,
+                sku=f"CHAT-PG-{suffix}",
+                slug=f"chat-pg-product-{suffix}",
+                name="Sản phẩm chat PostgreSQL",
+                price=250_000,
+            )
+            variant = ProductVariant(
+                product=product,
+                color=color,
+                size=size,
+                variant_sku=f"CHAT-PG-VARIANT-{suffix}",
+                stock_quantity=5,
+            )
+            session.add_all([category, color, size, product, variant])
+            await session.commit()
+            variant_id = str(variant.id)
+        await engine.dispose()
+        return variant_id
+
+    variant_id = asyncio.run(seed())
+    application = create_app()
+    api_engine = create_async_engine(MIGRATION_DATABASE_URL, poolclass=NullPool)
+    api_session_factory = async_sessionmaker(api_engine, expire_on_commit=False)
+
+    async def override_session():
+        async with api_session_factory() as session:
+            yield session
+
+    application.dependency_overrides[get_db_session] = override_session
+    with TestClient(application) as first, TestClient(application) as second:
+        cart = first.post(
+            "/api/v1/cart/items", json={"variant_id": variant_id, "quantity": 1}
+        ).json()["data"]
+        proposal = first.post(
+            "/api/v1/chat",
+            json={
+                "message": "Đề xuất thêm",
+                "action_context": {
+                    "action": "cart_add",
+                    "cart_id": cart["cart_id"],
+                    "variant_id": variant_id,
+                    "quantity": 1,
+                },
+            },
+        )
+        assert proposal.status_code == 200, proposal.text
+        token = proposal.json()["data"]["proposed_action"]["confirmation_token"]
+        assert first.get("/api/v1/cart").json()["data"]["items"][0]["quantity"] == 1
+        second.cookies.set("shop_guest", first.cookies["shop_guest"])
+        body = {
+            "message": "Xác nhận",
+            "confirmation_token": token,
+            "client_message_id": "00000000-0000-0000-0000-000000000091",
+        }
+        headers = {"Idempotency-Key": "postgres-chat-cart-add"}
+
+        def confirm(client: TestClient) -> tuple[int, str]:
+            response = client.post("/api/v1/chat", json=body, headers=headers)
+            return response.status_code, response.json()["data"]["answer"]
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            outcomes = list(executor.map(confirm, (first, second)))
+
+    assert [status_code for status_code, _ in outcomes] == [200, 200]
+    assert outcomes[0][1] == outcomes[1][1]
+
+    async def persisted_state() -> tuple[int, int, int]:
+        async with api_session_factory() as session:
+            cart_id = UUID(cart["cart_id"])
+            quantity = await session.scalar(
+                select(CartItem.quantity).where(CartItem.cart_id == cart_id)
+            )
+            consumed = await session.scalar(
+                select(func.count()).select_from(ActionConfirmation).where(
+                    ActionConfirmation.token_hash == hash_token(token),
+                    ActionConfirmation.consumed_at.is_not(None),
+                )
+            )
+            records = await session.scalar(
+                select(func.count()).select_from(IdempotencyRecord).where(
+                    IdempotencyRecord.operation == "cart_add",
+                    IdempotencyRecord.resource_key == str(cart_id),
+                )
+            )
+            return int(quantity or 0), int(consumed or 0), int(records or 0)
+
+    assert asyncio.run(persisted_state()) == (2, 1, 1)
     application.dependency_overrides.clear()
     asyncio.run(api_engine.dispose())

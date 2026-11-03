@@ -124,9 +124,11 @@ def test_alembic_has_single_loadable_commerce_head_that_enables_pgvector(
     scripts = ScriptDirectory.from_config(config)
 
     heads = scripts.get_heads()
-    assert heads == ["0007_cart_pricing"]
+    assert heads == ["0008_chat_action_payload"]
 
-    cart_revision = scripts.get_revision(heads[0])
+    chat_revision = scripts.get_revision(heads[0])
+    assert chat_revision.down_revision == "0007_cart_pricing"
+    cart_revision = scripts.get_revision("0007_cart_pricing")
     assert cart_revision.down_revision == "0006_commerce_foundation"
 
     revision = scripts.get_revision("0001_enable_pgvector")
