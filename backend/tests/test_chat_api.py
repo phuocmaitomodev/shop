@@ -10,6 +10,7 @@ from sqlalchemy import select
 from app.api.v1 import chat as chat_api
 from app.core.config import Settings, get_settings
 from app.core.middleware import ChatBodyLimitMiddleware
+from app.core.security import hash_token
 from app.db.session import get_db_session
 from app.main import create_app
 from app.models.catalog import Category, Color, Product, ProductVariant, Size
@@ -122,6 +123,51 @@ def chat_action_catalog(auth_session_factory) -> dict[str, str]:
             return {"variant_id": str(variant.id)}
 
     return asyncio.run(seed())
+
+
+def _create_guest_order_for_chat_action(
+    client: TestClient,
+    variant_id: str,
+    *,
+    idempotency_key: str,
+    payment_method: str = "cod",
+) -> dict:
+    cart_response = client.post(
+        "/api/v1/cart/items", json={"variant_id": variant_id, "quantity": 1}
+    )
+    assert cart_response.status_code == 201, cart_response.text
+    cart = cart_response.json()["data"]
+    checkout = {
+        "cart_id": cart["cart_id"],
+        "cart_version": cart["version"],
+        "recipient_name": "Nguyễn Văn An",
+        "phone": "0901234567",
+        "address_line": "1 Nguyễn Huệ",
+        "ward": "Bến Nghé",
+        "district": "Quận 1",
+        "province": "TP.HCM",
+        "note": None,
+        "payment_method": payment_method,
+    }
+    confirmation = client.post(
+        "/api/v1/action-confirmations",
+        json={
+            "action": "order_create",
+            "resource_key": cart["cart_id"],
+            "payload": checkout,
+        },
+    )
+    assert confirmation.status_code == 201, confirmation.text
+    created = client.post(
+        "/api/v1/orders",
+        headers={"Idempotency-Key": idempotency_key},
+        json={
+            **checkout,
+            "confirmation_token": confirmation.json()["data"]["confirmation_token"],
+        },
+    )
+    assert created.status_code == 201, created.text
+    return created.json()["data"]
 
 
 def test_chat_cart_proposal_is_db_backed_and_has_no_side_effect(
@@ -486,9 +532,10 @@ def test_chat_order_create_uses_server_totals_and_reviewed_order_service(
             "client_message_id": "00000000-0000-0000-0000-000000000088",
         },
     )
-    assert cross_replay.status_code == 200, cross_replay.text
+    assert cross_replay.status_code == 409, cross_replay.text
+    assert cross_replay.json()["error"]["code"] == "CONFIRMATION_INVALID"
     assert cross_conflict.status_code == 409
-    assert cross_conflict.json()["error"]["code"] == "IDEMPOTENCY_KEY_REUSED"
+    assert cross_conflict.json()["error"]["code"] == "CONFIRMATION_INVALID"
 
 
 def test_chat_order_cancel_uses_exact_owned_order_id(
@@ -563,6 +610,366 @@ def test_chat_order_cancel_uses_exact_owned_order_id(
 
     assert confirmed.status_code == 200, confirmed.text
     assert asyncio.run(status_of_order()) == "cancelled"
+
+
+def test_chat_guest_lookup_can_propose_and_confirm_cancel_without_cart_cookie(
+    auth_client: TestClient,
+    chat_action_catalog: dict[str, str],
+) -> None:
+    order = _create_guest_order_for_chat_action(
+        auth_client,
+        chat_action_catalog["variant_id"],
+        idempotency_key="chat-lookup-cancel-create",
+    )
+    lookup_headers = {"X-Order-Lookup-Token": order["guest_lookup_token"]}
+    auth_client.cookies.clear()
+
+    proposal = auth_client.post(
+        "/api/v1/chat",
+        headers=lookup_headers,
+        json={
+            "message": "Hủy đơn",
+            "action_context": {
+                "action": "order_cancel",
+                "order_id": order["id"],
+                "order_code": order["order_code"],
+                "reason": "Khách đổi ý",
+            },
+        },
+    )
+    assert proposal.status_code == 200, proposal.text
+
+    confirmed = auth_client.post(
+        "/api/v1/chat",
+        headers={
+            **lookup_headers,
+            "Idempotency-Key": "chat-lookup-cancel-confirm",
+        },
+        json={
+            "message": "Xác nhận",
+            "confirmation_token": proposal.json()["data"]["proposed_action"][
+                "confirmation_token"
+            ],
+            "client_message_id": "00000000-0000-0000-0000-000000000087",
+        },
+    )
+
+    assert confirmed.status_code == 200, confirmed.text
+    replay = auth_client.post(
+        "/api/v1/chat",
+        headers={
+            **lookup_headers,
+            "Idempotency-Key": "chat-lookup-cancel-confirm",
+        },
+        json={
+            "message": "Xác nhận lại",
+            "confirmation_token": proposal.json()["data"]["proposed_action"][
+                "confirmation_token"
+            ],
+            "client_message_id": "00000000-0000-0000-0000-000000000087",
+        },
+    )
+    key_conflict = auth_client.post(
+        "/api/v1/chat",
+        headers={
+            **lookup_headers,
+            "Idempotency-Key": "chat-lookup-cancel-confirm",
+        },
+        json={
+            "message": "Xác nhận khác",
+            "confirmation_token": proposal.json()["data"]["proposed_action"][
+                "confirmation_token"
+            ],
+            "client_message_id": "00000000-0000-0000-0000-000000000085",
+        },
+    )
+    consumed_replay = auth_client.post(
+        "/api/v1/chat",
+        headers={
+            **lookup_headers,
+            "Idempotency-Key": "chat-lookup-cancel-new-key",
+        },
+        json={
+            "message": "Xác nhận bằng khóa mới",
+            "confirmation_token": proposal.json()["data"]["proposed_action"][
+                "confirmation_token"
+            ],
+            "client_message_id": "00000000-0000-0000-0000-000000000087",
+        },
+    )
+    assert replay.status_code == 200, replay.text
+    assert replay.json()["data"]["answer"] == confirmed.json()["data"]["answer"]
+    assert key_conflict.status_code == 409, key_conflict.text
+    assert key_conflict.json()["error"]["code"] == "IDEMPOTENCY_KEY_REUSED"
+    assert consumed_replay.status_code == 409, consumed_replay.text
+    assert (
+        consumed_replay.json()["error"]["code"]
+        == "ORDER_STATUS_NOT_CANCELLABLE"
+    )
+    persisted = auth_client.get(
+        "/api/v1/orders/lookup",
+        params={"order_code": order["order_code"]},
+        headers=lookup_headers,
+    )
+    assert persisted.status_code == 200, persisted.text
+    assert persisted.json()["data"]["status"] == "cancelled"
+
+
+def test_chat_guest_order_proposal_rejects_missing_wrong_and_other_owner_lookup(
+    auth_client: TestClient,
+    auth_session_factory,
+    chat_action_catalog: dict[str, str],
+) -> None:
+    order = _create_guest_order_for_chat_action(
+        auth_client,
+        chat_action_catalog["variant_id"],
+        idempotency_key="chat-lookup-boundary-owner",
+    )
+    correct_lookup = order["guest_lookup_token"]
+    auth_client.cookies.clear()
+    other_order = _create_guest_order_for_chat_action(
+        auth_client,
+        chat_action_catalog["variant_id"],
+        idempotency_key="chat-lookup-boundary-other",
+    )
+    auth_client.cookies.clear()
+    action = {
+        "message": "Hủy đơn",
+        "action_context": {
+            "action": "order_cancel",
+            "order_id": order["id"],
+            "order_code": order["order_code"],
+            "reason": "Không thuộc chủ sở hữu",
+        },
+    }
+
+    async def confirmation_count() -> int:
+        async with auth_session_factory() as session:
+            rows = await session.scalars(
+                select(ActionConfirmation).where(
+                    ActionConfirmation.action == "order_cancel"
+                )
+            )
+            return len(rows.all())
+
+    before = asyncio.run(confirmation_count())
+    missing = auth_client.post("/api/v1/chat", json=action)
+    wrong = auth_client.post(
+        "/api/v1/chat",
+        headers={"X-Order-Lookup-Token": "wrong-lookup-token-value"},
+        json=action,
+    )
+    other_owner = auth_client.post(
+        "/api/v1/chat",
+        headers={"X-Order-Lookup-Token": other_order["guest_lookup_token"]},
+        json=action,
+    )
+
+    for response in (missing, wrong, other_owner):
+        assert response.status_code == 404, response.text
+        assert response.json()["error"]["code"] == "ORDER_NOT_FOUND"
+    assert asyncio.run(confirmation_count()) == before
+    persisted = auth_client.get(
+        "/api/v1/orders/lookup",
+        params={"order_code": order["order_code"]},
+        headers={"X-Order-Lookup-Token": correct_lookup},
+    )
+    assert persisted.status_code == 200, persisted.text
+    assert persisted.json()["data"]["status"] == "pending_confirmation"
+
+
+def test_chat_authenticated_other_owner_cannot_bypass_with_guest_lookup(
+    auth_client: TestClient,
+    create_auth_user,
+    chat_action_catalog: dict[str, str],
+) -> None:
+    order = _create_guest_order_for_chat_action(
+        auth_client,
+        chat_action_catalog["variant_id"],
+        idempotency_key="chat-auth-bypass-create",
+    )
+    lookup_headers = {"X-Order-Lookup-Token": order["guest_lookup_token"]}
+    action = {
+        "message": "Hủy đơn khách",
+        "action_context": {
+            "action": "order_cancel",
+            "order_id": order["id"],
+            "order_code": order["order_code"],
+            "reason": "Không thuộc chủ sở hữu",
+        },
+    }
+    proposal = auth_client.post("/api/v1/chat", headers=lookup_headers, json=action)
+    assert proposal.status_code == 200, proposal.text
+    auth_client.cookies.clear()
+    create_auth_user("chat-intruder@example.com")
+    login = auth_client.post(
+        "/api/v1/auth/login",
+        json={
+            "email": "chat-intruder@example.com",
+            "password": "MatKhau-AnToan-123",
+        },
+    )
+    assert login.status_code == 200, login.text
+
+    rejected_proposal = auth_client.post(
+        "/api/v1/chat",
+        headers=lookup_headers,
+        json=action,
+    )
+    rejected_confirmation = auth_client.post(
+        "/api/v1/chat",
+        headers={**lookup_headers, "Idempotency-Key": "chat-auth-bypass-cancel"},
+        json={
+            "message": "Xác nhận bằng phiên user khác",
+            "confirmation_token": proposal.json()["data"]["proposed_action"][
+                "confirmation_token"
+            ],
+            "client_message_id": "00000000-0000-0000-0000-000000000089",
+        },
+    )
+
+    assert rejected_proposal.status_code == 404, rejected_proposal.text
+    assert rejected_proposal.json()["error"]["code"] == "ORDER_NOT_FOUND"
+    assert rejected_confirmation.status_code == 409, rejected_confirmation.text
+    assert rejected_confirmation.json()["error"]["code"] == "CONFIRMATION_INVALID"
+
+
+def test_chat_guest_lookup_expired_confirmation_fails_without_side_effect(
+    auth_client: TestClient,
+    auth_session_factory,
+    chat_action_catalog: dict[str, str],
+) -> None:
+    order = _create_guest_order_for_chat_action(
+        auth_client,
+        chat_action_catalog["variant_id"],
+        idempotency_key="chat-lookup-expiry-create",
+    )
+    lookup_headers = {"X-Order-Lookup-Token": order["guest_lookup_token"]}
+    auth_client.cookies.clear()
+    proposal = auth_client.post(
+        "/api/v1/chat",
+        headers=lookup_headers,
+        json={
+            "message": "Hủy đơn",
+            "action_context": {
+                "action": "order_cancel",
+                "order_id": order["id"],
+                "order_code": order["order_code"],
+                "reason": "Khách đổi ý",
+            },
+        },
+    )
+    assert proposal.status_code == 200, proposal.text
+    confirmation_token = proposal.json()["data"]["proposed_action"][
+        "confirmation_token"
+    ]
+
+    async def expire_confirmation() -> None:
+        async with auth_session_factory() as session:
+            confirmation = await session.scalar(
+                select(ActionConfirmation).where(
+                    ActionConfirmation.token_hash == hash_token(confirmation_token)
+                )
+            )
+            assert confirmation is not None
+            confirmation.expires_at = datetime.now(timezone.utc) - timedelta(seconds=1)
+            await session.commit()
+
+    asyncio.run(expire_confirmation())
+    response = auth_client.post(
+        "/api/v1/chat",
+        headers={**lookup_headers, "Idempotency-Key": "chat-lookup-expired"},
+        json={
+            "message": "Xác nhận",
+            "confirmation_token": confirmation_token,
+            "client_message_id": "00000000-0000-0000-0000-000000000084",
+        },
+    )
+
+    assert response.status_code == 409, response.text
+    assert response.json()["error"]["code"] == "CONFIRMATION_INVALID"
+
+    async def confirmed_client_message() -> str | None:
+        async with auth_session_factory() as session:
+            confirmation = await session.scalar(
+                select(ActionConfirmation).where(
+                    ActionConfirmation.token_hash == hash_token(confirmation_token)
+                )
+            )
+            assert confirmation is not None
+            return confirmation.payload_json.get("confirmed_client_message_id")
+
+    assert asyncio.run(confirmed_client_message()) is None
+    persisted = auth_client.get(
+        "/api/v1/orders/lookup",
+        params={"order_code": order["order_code"]},
+        headers=lookup_headers,
+    )
+    assert persisted.status_code == 200, persisted.text
+    assert persisted.json()["data"]["status"] == "pending_confirmation"
+
+
+def test_chat_order_confirmation_binds_client_message_before_mutation_attempt(
+    auth_client: TestClient,
+    auth_session_factory,
+    chat_action_catalog: dict[str, str],
+) -> None:
+    order = _create_guest_order_for_chat_action(
+        auth_client,
+        chat_action_catalog["variant_id"],
+        idempotency_key="chat-prebind-create",
+    )
+    lookup_headers = {"X-Order-Lookup-Token": order["guest_lookup_token"]}
+    auth_client.cookies.clear()
+    proposal = auth_client.post(
+        "/api/v1/chat",
+        headers=lookup_headers,
+        json={
+            "message": "Hủy đơn",
+            "action_context": {
+                "action": "order_cancel",
+                "order_id": order["id"],
+                "order_code": order["order_code"],
+                "reason": "Khách đổi ý",
+            },
+        },
+    )
+    assert proposal.status_code == 200, proposal.text
+
+    async def make_order_ineligible() -> None:
+        async with auth_session_factory() as session:
+            persisted = await session.get(Order, UUID(order["id"]))
+            assert persisted is not None
+            persisted.status = "completed"
+            await session.commit()
+
+    asyncio.run(make_order_ineligible())
+    client_message_id = "00000000-0000-0000-0000-000000000088"
+    response = auth_client.post(
+        "/api/v1/chat",
+        headers={**lookup_headers, "Idempotency-Key": "chat-prebind-cancel"},
+        json={
+            "message": "Xác nhận",
+            "confirmation_token": proposal.json()["data"]["proposed_action"][
+                "confirmation_token"
+            ],
+            "client_message_id": client_message_id,
+        },
+    )
+    assert response.status_code == 409, response.text
+    assert response.json()["error"]["code"] == "ORDER_STATUS_NOT_CANCELLABLE"
+
+    async def bound_client_message() -> str | None:
+        async with auth_session_factory() as session:
+            confirmation = await session.scalar(
+                select(ActionConfirmation).where(
+                    ActionConfirmation.action == "order_cancel"
+                )
+            )
+            assert confirmation is not None
+            return confirmation.payload_json.get("confirmed_client_message_id")
+
+    assert asyncio.run(bound_client_message()) == client_message_id
 
 
 def test_chat_refund_request_uses_server_order_amount(
@@ -649,6 +1056,74 @@ def test_chat_refund_request_uses_server_order_amount(
     assert refund is not None
     assert refund.amount == created["total"]
     assert refund.reason_code == "wrong_item"
+
+
+def test_chat_guest_lookup_can_propose_and_confirm_refund_without_cart_cookie(
+    auth_client: TestClient,
+    auth_session_factory,
+    chat_action_catalog: dict[str, str],
+) -> None:
+    order = _create_guest_order_for_chat_action(
+        auth_client,
+        chat_action_catalog["variant_id"],
+        idempotency_key="chat-lookup-refund-create",
+        payment_method="online_demo",
+    )
+
+    async def complete_order() -> None:
+        async with auth_session_factory() as session:
+            persisted = await session.get(Order, UUID(order["id"]))
+            assert persisted is not None
+            payment = await session.scalar(
+                select(PaymentAttempt).where(PaymentAttempt.order_id == persisted.id)
+            )
+            assert payment is not None
+            persisted.status = "completed"
+            persisted.payment_status = "demo_approved"
+            payment.status = "demo_approved"
+            await session.commit()
+
+    asyncio.run(complete_order())
+    lookup_headers = {"X-Order-Lookup-Token": order["guest_lookup_token"]}
+    auth_client.cookies.clear()
+    proposal = auth_client.post(
+        "/api/v1/chat",
+        headers=lookup_headers,
+        json={
+            "message": "Yêu cầu hoàn tiền",
+            "action_context": {
+                "action": "refund_request",
+                "order_id": order["id"],
+                "order_code": order["order_code"],
+                "reason_code": "wrong_item",
+                "reason_detail": "Nhận sai sản phẩm",
+            },
+        },
+    )
+    assert proposal.status_code == 200, proposal.text
+
+    confirmed = auth_client.post(
+        "/api/v1/chat",
+        headers={
+            **lookup_headers,
+            "Idempotency-Key": "chat-lookup-refund-confirm",
+        },
+        json={
+            "message": "Xác nhận",
+            "confirmation_token": proposal.json()["data"]["proposed_action"][
+                "confirmation_token"
+            ],
+            "client_message_id": "00000000-0000-0000-0000-000000000086",
+        },
+    )
+
+    assert confirmed.status_code == 200, confirmed.text
+    persisted = auth_client.get(
+        f"/api/v1/orders/{order['order_code']}/refund-requests/latest",
+        headers=lookup_headers,
+    )
+    assert persisted.status_code == 200, persisted.text
+    assert persisted.json()["data"]["amount"] == order["total"]
 
 
 def _client(monkeypatch) -> TestClient:
@@ -830,6 +1305,14 @@ def test_openapi_exposes_public_bounded_chat_contract(client: TestClient) -> Non
     operation = schema["paths"]["/api/v1/chat"]["post"]
 
     assert operation.get("security") is None
+    header_parameters = {
+        parameter["name"]: parameter for parameter in operation["parameters"]
+    }
+    assert header_parameters["Idempotency-Key"]["required"] is False
+    assert header_parameters["X-Order-Lookup-Token"]["required"] is False
+    lookup_schema = header_parameters["X-Order-Lookup-Token"]["schema"]["anyOf"][0]
+    assert lookup_schema["minLength"] == 20
+    assert lookup_schema["maxLength"] == 200
     assert operation["responses"]["200"]["content"]["application/json"]["schema"][
         "$ref"
     ] == "#/components/schemas/ChatEnvelope"

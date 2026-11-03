@@ -13,7 +13,6 @@ from app.api.v1.cart import (
     _load_sellable_variant,
     _owned_item,
     _require_cart_version,
-    _resolve_owner,
     _validate_price,
     _validate_stock,
     add_cart_item,
@@ -27,6 +26,7 @@ from app.api.v1.orders import (
     _order_confirmation_snapshot,
     _owner_guest_hash,
     _owned_order,
+    _resolve_mutation_owner,
     _session_key,
     cancel_order,
     create_order,
@@ -99,13 +99,24 @@ class DatabaseChatActionAdapter:
                 message="Hành động chat này chưa sẵn sàng.",
             )
 
-        owner = await _resolve_owner(self._request, self._session)
+        order_mutation = isinstance(
+            context, (OrderCancelActionContext, RefundRequestActionContext)
+        )
+        owner = await _resolve_mutation_owner(
+            self._request, self._session, allow_lookup=order_mutation
+        )
+        allow_cart_token = self._request.headers.get("X-Order-Lookup-Token") is None
         if isinstance(context, RefundRequestActionContext):
             order_code = await self._session.scalar(
                 select(Order.order_code).where(Order.id == context.order_id)
             )
             order = (
-                await _owned_order(self._session, owner, order_code)
+                await _owned_order(
+                    self._session,
+                    owner,
+                    order_code,
+                    allow_cart_token=allow_cart_token,
+                )
                 if order_code is not None
                 else None
             )
@@ -144,7 +155,12 @@ class DatabaseChatActionAdapter:
                 select(Order.order_code).where(Order.id == context.order_id)
             )
             order = (
-                await _owned_order(self._session, owner, order_code)
+                await _owned_order(
+                    self._session,
+                    owner,
+                    order_code,
+                    allow_cart_token=allow_cart_token,
+                )
                 if order_code is not None
                 else None
             )
@@ -295,7 +311,9 @@ class DatabaseChatActionAdapter:
         idempotency_key: str,
         client_message_id: UUID,
     ) -> ChatActionExecution:
-        owner = await _resolve_owner(self._request, self._session)
+        owner = await _resolve_mutation_owner(
+            self._request, self._session, allow_lookup=True
+        )
         confirmation = await self._session.scalar(
             select(ActionConfirmation).where(
                 ActionConfirmation.token_hash == hash_token(token)
@@ -365,6 +383,7 @@ class DatabaseChatActionAdapter:
             action_payload = confirmation.payload_json.get("action_context")
             if not isinstance(action_payload, dict):
                 raise self._invalid_confirmation()
+            await self._bind_client_message(confirmation.id, client_message_id)
         if confirmation.action == "order_create":
             context = OrderCreateActionContext.model_validate(
                 confirmation.payload_json["action_context"]
@@ -387,7 +406,6 @@ class DatabaseChatActionAdapter:
                 idempotency_key,
                 self._session,
             )
-            await self._bind_client_message(confirmation.id, client_message_id)
             order = result["data"]
             return ChatActionExecution(
                 action=confirmation.action,
@@ -410,7 +428,6 @@ class DatabaseChatActionAdapter:
                 idempotency_key,
                 self._session,
             )
-            await self._bind_client_message(confirmation.id, client_message_id)
             order = result["data"]
             return ChatActionExecution(
                 action=confirmation.action,
@@ -432,7 +449,6 @@ class DatabaseChatActionAdapter:
                 idempotency_key,
                 self._session,
             )
-            await self._bind_client_message(confirmation.id, client_message_id)
             refund = result["data"]
             return ChatActionExecution(
                 action=confirmation.action,
@@ -548,17 +564,23 @@ class DatabaseChatActionAdapter:
             raise self._invalid_confirmation()
         supplied = str(client_message_id)
         bound = confirmation.payload_json.get("confirmed_client_message_id")
-        if bound is not None and bound != supplied:
+        if bound == supplied:
+            await self._session.commit()
+            return
+        if bound is not None:
             raise AppError(
                 status_code=status.HTTP_409_CONFLICT,
                 code="IDEMPOTENCY_KEY_REUSED",
                 message="Idempotency-Key đã được dùng cho dữ liệu khác.",
             )
-        if bound is None:
-            confirmation.payload_json = {
-                **confirmation.payload_json,
-                "confirmed_client_message_id": supplied,
-            }
+        if confirmation.consumed_at is not None or _as_utc(
+            confirmation.expires_at
+        ) <= datetime.now(timezone.utc):
+            raise self._invalid_confirmation()
+        confirmation.payload_json = {
+            **confirmation.payload_json,
+            "confirmed_client_message_id": supplied,
+        }
         await self._session.commit()
 
     @staticmethod

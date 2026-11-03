@@ -84,6 +84,12 @@ async def chat(
     idempotency_key: str | None = Header(
         default=None, min_length=8, max_length=200, alias="Idempotency-Key"
     ),
+    _lookup_token: str | None = Header(
+        default=None,
+        min_length=20,
+        max_length=200,
+        alias="X-Order-Lookup-Token",
+    ),
     session: AsyncSession = Depends(get_db_session),
     settings: Settings = Depends(get_settings),
     commerce_repository: CommerceReadRepository | None = Depends(

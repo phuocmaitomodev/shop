@@ -175,6 +175,9 @@ gửi `confirmation_token` server-issued cùng `client_message_id` UUID, không 
 dưới dạng hash, gắn owner/session/action/resource/payload tối đa 5 phút và chỉ consume
 nguyên tử một lần; retry cùng key/payload trả lại kết quả cũ, còn key xung đột payload
 trả `IDEMPOTENCY_KEY_REUSED`.
+Guest đã mất/hết hạn cookie cart gửi `X-Order-Lookup-Token` (20–200 ký tự) trong cả
+lượt đề xuất và xác nhận `order_cancel`/`refund_request`; session authenticated luôn
+có ưu tiên và lookup token không được vượt ownership của user khác.
 
 Mỗi phần tử `sources` dùng schema additive sau:
 

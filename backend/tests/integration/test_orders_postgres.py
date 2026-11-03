@@ -756,3 +756,198 @@ def test_postgres_chat_confirmation_concurrent_consume_is_idempotent() -> None:
     assert asyncio.run(persisted_state()) == (2, 1, 1)
     application.dependency_overrides.clear()
     asyncio.run(api_engine.dispose())
+
+
+def test_postgres_chat_guest_lookup_ownership_and_concurrent_cancel() -> None:
+    assert MIGRATION_DATABASE_URL is not None
+    require_fresh_migrated_database(MIGRATION_DATABASE_URL)
+
+    async def seed() -> str:
+        engine = create_async_engine(MIGRATION_DATABASE_URL)
+        session_factory = async_sessionmaker(engine, expire_on_commit=False)
+        suffix = uuid4().hex
+        async with session_factory() as session:
+            category = Category(name="Chat lookup PG", slug=f"chat-lookup-pg-{suffix}")
+            color = Color(
+                name="Đen lookup PG", slug=f"chat-lookup-black-{suffix}"
+            )
+            size = Size(code=f"CL-{suffix[:8]}", name="Chat lookup PG")
+            product = Product(
+                category=category,
+                sku=f"CHAT-LOOKUP-PG-{suffix}",
+                slug=f"chat-lookup-pg-product-{suffix}",
+                name="Sản phẩm chat lookup PostgreSQL",
+                price=275_000,
+            )
+            variant = ProductVariant(
+                product=product,
+                color=color,
+                size=size,
+                variant_sku=f"CHAT-LOOKUP-PG-VARIANT-{suffix}",
+                stock_quantity=4,
+            )
+            session.add_all([category, color, size, product, variant])
+            await session.commit()
+            variant_id = str(variant.id)
+        await engine.dispose()
+        return variant_id
+
+    variant_id = asyncio.run(seed())
+    application = create_app()
+    api_engine = create_async_engine(MIGRATION_DATABASE_URL, poolclass=NullPool)
+    api_session_factory = async_sessionmaker(api_engine, expire_on_commit=False)
+
+    async def override_session():
+        async with api_session_factory() as session:
+            yield session
+
+    application.dependency_overrides[get_db_session] = override_session
+    with (
+        TestClient(application) as first,
+        TestClient(application) as second,
+        TestClient(application) as third,
+    ):
+        cart_response = first.post(
+            "/api/v1/cart/items", json={"variant_id": variant_id, "quantity": 1}
+        )
+        assert cart_response.status_code == 201, cart_response.text
+        cart = cart_response.json()["data"]
+        checkout = {
+            "cart_id": cart["cart_id"],
+            "cart_version": cart["version"],
+            "recipient_name": "Khách chat lookup PostgreSQL",
+            "phone": "0901234567",
+            "address_line": "4 Đường PostgreSQL",
+            "province": "TP. Hồ Chí Minh",
+            "payment_method": "cod",
+        }
+        create_confirmation = first.post(
+            "/api/v1/action-confirmations",
+            json={
+                "action": "order_create",
+                "resource_key": cart["cart_id"],
+                "payload": checkout,
+            },
+        )
+        assert create_confirmation.status_code == 201, create_confirmation.text
+        created = first.post(
+            "/api/v1/orders",
+            headers={"Idempotency-Key": "postgres-chat-lookup-create"},
+            json={
+                **checkout,
+                "confirmation_token": create_confirmation.json()["data"][
+                    "confirmation_token"
+                ],
+            },
+        )
+        assert created.status_code == 201, created.text
+        order = created.json()["data"]
+        lookup_headers = {"X-Order-Lookup-Token": order["guest_lookup_token"]}
+        first.cookies.clear()
+        action = {
+            "message": "Hủy đơn",
+            "action_context": {
+                "action": "order_cancel",
+                "order_id": order["id"],
+                "order_code": order["order_code"],
+                "reason": "Khách đổi ý",
+            },
+        }
+
+        missing = second.post("/api/v1/chat", json=action)
+        wrong = second.post(
+            "/api/v1/chat",
+            headers={"X-Order-Lookup-Token": "wrong-postgres-lookup-token"},
+            json=action,
+        )
+        assert missing.status_code == wrong.status_code == 404
+        proposal = first.post("/api/v1/chat", headers=lookup_headers, json=action)
+        assert proposal.status_code == 200, proposal.text
+        token = proposal.json()["data"]["proposed_action"]["confirmation_token"]
+        headers = {
+            **lookup_headers,
+            "Idempotency-Key": "postgres-chat-lookup-cancel",
+        }
+        first_message_id = "00000000-0000-0000-0000-000000000083"
+        second_message_id = "00000000-0000-0000-0000-000000000084"
+
+        def confirm(attempt: tuple[TestClient, str]) -> tuple[str, int, str]:
+            client, client_message_id = attempt
+            response = client.post(
+                "/api/v1/chat",
+                headers=headers,
+                json={
+                    "message": "Xác nhận",
+                    "confirmation_token": token,
+                    "client_message_id": client_message_id,
+                },
+            )
+            payload = response.json()
+            detail = (
+                payload["data"]["answer"]
+                if response.status_code == 200
+                else payload["error"]["code"]
+            )
+            return client_message_id, response.status_code, detail
+
+        attempts = (
+            (first, first_message_id),
+            (second, first_message_id),
+            (third, second_message_id),
+        )
+        with ThreadPoolExecutor(max_workers=3) as executor:
+            outcomes = list(executor.map(confirm, attempts))
+
+    winning_message_ids = {
+        client_message_id
+        for client_message_id, status_code, _ in outcomes
+        if status_code == 200
+    }
+    assert len(winning_message_ids) == 1
+    winning_message_id = next(iter(winning_message_ids))
+    for client_message_id, status_code, detail in outcomes:
+        if client_message_id == winning_message_id:
+            assert status_code == 200
+        else:
+            assert status_code == 409
+            assert detail == "IDEMPOTENCY_KEY_REUSED"
+
+    async def persisted_state() -> tuple[str, int, int, int, str | None]:
+        async with api_session_factory() as session:
+            persisted_order = await session.get(Order, UUID(order["id"]))
+            assert persisted_order is not None
+            restores = await session.scalar(
+                select(func.count()).select_from(InventoryMovement).where(
+                    InventoryMovement.order_id == persisted_order.id,
+                    InventoryMovement.movement_type == "order_cancel_restore",
+                )
+            )
+            confirmation = await session.scalar(
+                select(ActionConfirmation).where(
+                    ActionConfirmation.token_hash == hash_token(token)
+                )
+            )
+            assert confirmation is not None
+            records = await session.scalar(
+                select(func.count()).select_from(IdempotencyRecord).where(
+                    IdempotencyRecord.operation == "order_cancel",
+                    IdempotencyRecord.resource_key == order["order_code"],
+                )
+            )
+            return (
+                persisted_order.status,
+                int(restores or 0),
+                int(confirmation.consumed_at is not None),
+                int(records or 0),
+                confirmation.payload_json.get("confirmed_client_message_id"),
+            )
+
+    assert asyncio.run(persisted_state()) == (
+        "cancelled",
+        1,
+        1,
+        1,
+        winning_message_id,
+    )
+    application.dependency_overrides.clear()
+    asyncio.run(api_engine.dispose())
