@@ -83,7 +83,30 @@ Chỉ tạo bản ghi yêu cầu và trạng thái mô phỏng; không gọi gat
 
 ### 4.4 Chat
 
-`POST /chat` giữ `message` và bounded `history`, response có `answer`, `products`, `sources`, `status` và additive `proposed_action` nullable:
+`POST /chat` giữ `message` và bounded `history`, đồng thời nhận field additive
+`action_context` nullable. `action_context` là discriminated union typed do UI hoặc
+server state tin cậy cung cấp; model, `message`, `history`, retrieval source và prose
+không được tạo hoặc sửa ID, quantity, payment field hay payload mutation. Khi thiếu
+context bắt buộc hoặc ID không khớp resource thuộc owner hiện tại, server chỉ hỏi làm
+rõ/fail closed và không phát confirmation.
+
+Các shape được phép:
+
+- `cart_add`: `action`, exact `cart_id`, exact `variant_id`, `quantity`.
+- `cart_update`: `action`, exact `cart_id`, exact `cart_item_id`, `cart_version`,
+  `quantity`.
+- `cart_remove`: `action`, exact `cart_id`, exact `cart_item_id`, `cart_version`.
+- `order_create`: `action`, exact `cart_id`, `cart_version`, typed `recipient`, typed
+  `address`, `payment_method=cod|online_demo`, `coupon_code` nullable.
+- `order_cancel`: `action`, exact `order_id`; `order_code` chỉ là display value đã
+  đối chiếu với cùng record.
+- `refund_request`: `action`, exact `order_id`, `reason_code` allow-list và
+  `reason_detail` bounded nullable.
+
+Không shape nào nhận `amount`, totals, price, stock, status, SQL, endpoint hay tool
+name. Server hydrate/tính các field đó từ PostgreSQL. Unknown field/action bị reject;
+ID từ text/model không được copy vào `action_context`. Response có `answer`,
+`products`, `sources`, `status` và additive `proposed_action` nullable:
 
 ```json
 {
@@ -98,7 +121,17 @@ Chỉ tạo bản ghi yêu cầu và trạng thái mô phỏng; không gọi gat
 }
 ```
 
-`confirmation_token` chỉ được phát sau authorization/read validation, bind với owner/session, action, resource, normalized payload hash và TTL tối đa 5 phút. Token lưu hash, dùng đúng một lần. Chat không thực thi mutation trong cùng lượt đề xuất. User phải xác nhận rõ ở lượt sau; server reauthorize/revalidate rồi mới gọi API/service mutation với `Idempotency-Key` ổn định. Greeting/read-only không có token. Frontend không tự dựng mutation request từ prose.
+`confirmation_token` chỉ được production DB-backed ownership/action adapter phát sau
+authorization, ownership check và read validation của typed `action_context`; token
+bind với owner/session, action, exact resource IDs, normalized payload hash và TTL tối
+đa 5 phút. Database chỉ lưu token hash và consume atomically đúng một lần. Chat không
+thực thi mutation trong cùng lượt đề xuất. Lượt xác nhận gửi token server-issued,
+`client_message_id` và `Idempotency-Key`, không dựng lại payload từ prose. Adapter
+phải reauthorize, rehydrate/revalidate cart version, variant/stock/price, order state
+và refund eligibility rồi gọi đúng cùng commerce use-case/service đã được API trực
+tiếp sử dụng và review; không có business mutation fork riêng cho RAG. Idempotency
+record và business mutation tuân theo mục 5. Greeting/read-only không có token.
+Frontend không tự dựng mutation request từ prose.
 
 ## 5. Idempotency và concurrency
 
@@ -158,6 +191,9 @@ Mọi enum/check/index/FK phải nằm trong migration. PII/order snapshots khô
 - Prompt injection, yêu cầu lộ prompt/secret/data khác, hoặc bypass confirmation trả fallback tiếng Việt và không gọi tool.
 - Rate limit theo IP/session/owner cho chat, lookup và mutation; log redacted kèm request ID.
 - Provider unavailable không ảnh hưởng catalog/cart/order APIs; mutation không phụ thuộc Gemini để commit.
+- Production wiring không được trả `None`, dùng no-op adapter hoặc test double. Nếu
+  DB-backed ownership/action adapter chưa sẵn sàng, mutation chat phải unavailable
+  fail closed; test-double-only không đạt release gate.
 
 ## 9. Side-effect confirmation UX
 
@@ -174,7 +210,10 @@ Mọi enum/check/index/FK phải nằm trong migration. PII/order snapshots khô
 - `EXP-CONTRACT-03`: user/guest/admin ownership; đổi ID/token không truy cập resource khác.
 - `EXP-CONTRACT-04`: retry mutation idempotent; key reuse payload khác 409; stock không double-change.
 - `EXP-CONTRACT-05`: order/payment/refund state machines từ chối transition sai.
-- `EXP-CONTRACT-06`: chat mutation cần proposal + one-time confirmation + revalidation; không side effect từ prose/injection.
+- `EXP-CONTRACT-06`: chat mutation chỉ dùng typed `action_context` từ UI/server
+  state, cần proposal + one-time confirmation + reauthorization/revalidation và gọi
+  cùng reviewed commerce use-case; không side effect từ prose/injection, không
+  model-generated ID/amount và không test-double-only.
 - `EXP-CONTRACT-07`: payment/refund luôn mô phỏng, VND từ SQL, không external call/credential.
 - `EXP-CONTRACT-08`: policy/product dynamic data grounded đúng source; stale/missing/provider failure an toàn.
 - `EXP-CONTRACT-09`: frontend responsive desktop/mobile, copy tiếng Việt, không che CTA, không console error.

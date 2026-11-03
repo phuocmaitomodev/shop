@@ -139,8 +139,14 @@ API trả chi tiết item/giá mới để frontend yêu cầu user xác nhận 
 ### Contract MVP hiện hành
 
 `POST /chat` là endpoint chat công khai, không lưu transcript. Request gồm
-`message` (1–1000 ký tự, không chỉ có khoảng trắng) và tối đa 6 phần tử `history`;
-mỗi phần tử có `role` (`user` hoặc `assistant`) và `content` 1–1000 ký tự.
+`message` (1–1000 ký tự, không chỉ có khoảng trắng), tối đa 6 phần tử `history`
+và `action_context` typed nullable; mỗi history item có `role` (`user` hoặc
+`assistant`) và `content` 1–1000 ký tự. `action_context` là discriminated union
+theo mục 4.4 của
+[`commerce-chatbot-expansion-contract.md`](commerce-chatbot-expansion-contract.md):
+UI/server state phải cung cấp exact variant/cart item/cart/order IDs cùng version,
+recipient/address/payment/reason cần cho action. Prose/model/history không được tạo
+ID hoặc amount; request không nhận amount/totals/status/tool/endpoint.
 
 Response dùng success envelope và trả `answer`, `products`, `sources`, `status`.
 `status` thuộc `ok`, `insufficient_data`, `out_of_scope`, `provider_unavailable`.
@@ -157,6 +163,11 @@ greeting, out-of-scope và injection.
 Intent không phải field response công khai; policy không đi qua product selector
 và mọi dữ liệu commerce động phải hydrate từ SQL sau authorization. Chat chỉ đề
 xuất side effect bằng `proposed_action`; không mutation trong cùng lượt đề xuất.
+Thiếu/ambiguous `action_context` không được suy ra từ prose: response hỏi làm rõ
+hoặc fail closed và `proposed_action=null`. Production phải wire DB-backed
+ownership/action adapter để issue/consume one-time token, reauthorize/revalidate và
+gọi cùng reviewed commerce use-case của API trực tiếp. Test double/no-op/`None`
+không phải implementation hợp lệ.
 
 Mỗi phần tử `sources` dùng schema additive sau:
 

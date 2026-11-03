@@ -167,5 +167,14 @@ Kiểm tra ít nhất: header/menu/search, listing/filter, product variant CTA, 
   cần order code + header token.
 - Chat mutation phải qua proposal/confirmation một lần; expired/replayed/wrong
   owner/changed payload đều fail closed và không có side effect.
+- `POST /chat` chỉ phát proposal khi có typed `action_context` từ UI/server state với
+  exact variant/item/order/cart IDs và field bắt buộc theo action. Prose/model không
+  tạo ID/amount; thiếu/ambiguous/unknown field cho zero side effect.
+- Test production wiring trên PostgreSQL thật: DB-backed adapter issue/consume token
+  atomically, reauthorize/revalidate rồi gọi cùng reviewed commerce use-case. Mock,
+  fake, no-op hoặc dependency trả `None` chỉ là unit support, không đủ để PASS gate.
+- E2E bao phủ cart add/update/remove, order create/cancel và refund request với token
+  expiry/replay/wrong owner, version/price/stock/state thay đổi, duplicate key và
+  chứng minh không có mutation trước confirm.
 - UI/E2E ghi rõ COD/online/refund là mô phỏng, tiếng Việt/VND, responsive và
   không có request tới payment/refund provider bên ngoài.

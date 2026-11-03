@@ -57,6 +57,12 @@ Bộ phân loại trả schema allow-list, ví dụ:
 
 Giá trị filter được validate bằng code; không ghép SQL từ text. Nếu entity mơ hồ, chatbot hỏi lại hoặc tìm candidate, không tự chọn bừa.
 
+Với mutation commerce, classifier chỉ chọn intent; nó không được trích ID, amount
+hoặc payload side effect từ prose. Proposal chỉ được tạo khi request có
+`action_context` typed do UI/server state cung cấp, chứa exact resource IDs và các
+field bắt buộc theo contract. Thiếu/ambiguous context phải hỏi làm rõ với zero side
+effect. Unknown field/action bị schema validator reject.
+
 ### Bước C — retrieval
 
 - Product intent: SQL filters là bắt buộc; full-text/trigram có thể hỗ trợ keyword. Vector product-description chỉ bổ sung/rerank candidates.
@@ -107,6 +113,11 @@ Lưu assistant message, retrieval trace tối thiểu (IDs/scores/version, khôn
 - Rate limit, max messages/context, max output tokens.
 - Log đã redact; không log API key hoặc cookie.
 - Product/order APIs vẫn hoạt động khi Gemini/embedding lỗi.
+- Production DB-backed ownership/action adapter là boundary bắt buộc cho mutation
+  chat: issue/consume confirmation token atomically, reauthorize/revalidate trên SQL
+  hiện tại và gọi cùng reviewed commerce use-case của API trực tiếp. Không dùng
+  adapter `None`/no-op/test double trong production; không fork mutation logic trong
+  RAG. Confirmation token không thay authorization hoặc idempotency.
 
 ## 6. Hybrid ranking đề xuất
 
@@ -150,6 +161,10 @@ Bộ test gồm:
 - Không có dữ liệu, out-of-scope và Gemini unavailable.
 - Prompt injection trong user message và knowledge document.
 - Model trả ID/giá không thuộc context: validator chặn.
+- Mutation prose không có typed `action_context`: zero side effect/no proposal;
+  exact context hợp lệ mới có proposal, one-time confirmation và mutation qua
+  production DB adapter. Bao phủ expired/replayed/wrong-owner token, changed
+  cart/price/stock/order state, duplicate idempotency key và provider failure.
 - Support request tạo một ticket và admin đọc đúng transcript.
 
 Đánh giá không chỉ keyword match: kiểm tra grounded source IDs, field SQL chính xác, không hallucination, link hợp lệ và độ ổn định qua nhiều lần chạy.

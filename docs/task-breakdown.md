@@ -233,3 +233,19 @@ QA E2E phụ thuộc backend, RAG và frontend. Card integration/release do
 `shop-orchestrator` sở hữu phụ thuộc tất cả card implementation/QA, review full
 SHA, dựng canonical local integration, clean-room test và chỉ chuẩn bị handoff;
 không push/merge. Dependency cụ thể và task ID là nguồn thật trên board `shop`.
+
+Gap fail-closed cho chat mutation phải theo chuỗi cứng:
+
+```text
+EXP-CONTRACT-GAP typed action_context
+  → EXP-BE adapter ownership/action DB-backed + shared commerce use-cases
+  → EXP-RAG finalization proposal/confirmation production wiring
+  → EXP-FE chat confirmation
+  → EXP-QA clean-room E2E
+  → EXP-REL release gate
+```
+
+Không consumer nào được bỏ qua gap bằng test double. Worktree RAG partial/dirty được
+bảo toàn làm evidence/source patch, không commit hoặc coi là prerequisite reviewed;
+gap finalization phải port tối thiểu lên chuỗi reviewed, chạy production DB-backed
+tests và bàn giao commit sạch.
