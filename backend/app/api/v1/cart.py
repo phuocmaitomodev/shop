@@ -280,7 +280,34 @@ def _empty_cart() -> CartResponse:
     )
 
 
-def _coupon_discount(coupon: Coupon | None, subtotal: int) -> int:
+async def _coupon_owner_limit_reached(
+    session: AsyncSession, owner: CartOwner, coupon: Coupon
+) -> bool:
+    if coupon.per_user_limit is None:
+        return False
+    redemption_statement = select(func.count(CouponRedemption.id)).where(
+        CouponRedemption.coupon_id == coupon.id
+    )
+    if owner.user_id is not None:
+        redemption_statement = redemption_statement.where(
+            CouponRedemption.user_id == owner.user_id
+        )
+    elif owner.guest_token is not None:
+        redemption_statement = redemption_statement.where(
+            CouponRedemption.guest_fingerprint == hash_token(owner.guest_token)
+        )
+    else:
+        return True
+    redemption_count = await session.scalar(redemption_statement)
+    return (redemption_count or 0) >= coupon.per_user_limit
+
+
+async def _coupon_discount(
+    session: AsyncSession,
+    owner: CartOwner,
+    coupon: Coupon | None,
+    subtotal: int,
+) -> int:
     if coupon is None or not coupon.is_active or subtotal < coupon.min_subtotal:
         return 0
     now = datetime.now(timezone.utc)
@@ -291,6 +318,8 @@ def _coupon_discount(coupon: Coupon | None, subtotal: int) -> int:
     ):
         return 0
     if coupon.usage_limit is not None and coupon.used_count >= coupon.usage_limit:
+        return 0
+    if await _coupon_owner_limit_reached(session, owner, coupon):
         return 0
     if coupon.discount_type == "fixed":
         discount = coupon.discount_value
@@ -307,7 +336,9 @@ def _as_utc(value: datetime | None) -> datetime | None:
     return value.replace(tzinfo=timezone.utc)
 
 
-def _cart_response(cart: Cart) -> CartResponse:
+async def _cart_response(
+    session: AsyncSession, owner: CartOwner, cart: Cart
+) -> CartResponse:
     response_items: list[CartItemResponse] = []
     for item in sorted(cart.items, key=lambda candidate: str(candidate.id)):
         variant = item.variant
@@ -349,7 +380,7 @@ def _cart_response(cart: Cart) -> CartResponse:
         if subtotal == 0 or subtotal >= settings.free_shipping_threshold
         else settings.shipping_flat_fee
     )
-    discount_amount = _coupon_discount(cart.coupon, subtotal)
+    discount_amount = await _coupon_discount(session, owner, cart.coupon, subtotal)
     return CartResponse(
         cart_id=cart.id,
         version=cart.version,
@@ -413,7 +444,9 @@ async def get_cart(
     owner = await _resolve_owner(request, session)
     cart = await _find_cart(session, owner)
     return {
-        "data": _cart_response(cart) if cart is not None else _empty_cart(),
+        "data": await _cart_response(session, owner, cart)
+        if cart is not None
+        else _empty_cart(),
         "meta": {"request_id": request.state.request_id},
     }
 
@@ -460,7 +493,7 @@ async def add_cart_item(
     await session.commit()
     cart = await _reload_cart(session, cart.id)
     return {
-        "data": _cart_response(cart),
+        "data": await _cart_response(session, owner, cart),
         "meta": {"request_id": request.state.request_id},
     }
 
@@ -491,7 +524,7 @@ async def update_cart_item(
     await session.commit()
     cart = await _reload_cart(session, cart.id)
     return {
-        "data": _cart_response(cart),
+        "data": await _cart_response(session, owner, cart),
         "meta": {"request_id": request.state.request_id},
     }
 
@@ -519,7 +552,7 @@ async def delete_cart_item(
     await session.commit()
     cart = await _reload_cart(session, cart.id)
     return {
-        "data": _cart_response(cart),
+        "data": await _cart_response(session, owner, cart),
         "meta": {"request_id": request.state.request_id},
     }
 
@@ -589,25 +622,12 @@ async def apply_cart_coupon(
             details={"min_subtotal": coupon.min_subtotal, "subtotal": subtotal},
         )
 
-    if coupon.per_user_limit is not None:
-        redemption_statement = select(func.count(CouponRedemption.id)).where(
-            CouponRedemption.coupon_id == coupon.id
+    if await _coupon_owner_limit_reached(session, owner, coupon):
+        raise AppError(
+            status_code=status.HTTP_409_CONFLICT,
+            code="COUPON_NOT_APPLICABLE",
+            message="Mã giảm giá đã đạt giới hạn sử dụng cho khách hàng này.",
         )
-        if owner.user_id is not None:
-            redemption_statement = redemption_statement.where(
-                CouponRedemption.user_id == owner.user_id
-            )
-        elif owner.guest_token is not None:
-            redemption_statement = redemption_statement.where(
-                CouponRedemption.guest_fingerprint == hash_token(owner.guest_token)
-            )
-        redemption_count = await session.scalar(redemption_statement)
-        if (redemption_count or 0) >= coupon.per_user_limit:
-            raise AppError(
-                status_code=status.HTTP_409_CONFLICT,
-                code="COUPON_NOT_APPLICABLE",
-                message="Mã giảm giá đã đạt giới hạn sử dụng cho khách hàng này.",
-            )
 
     cart.coupon_id = coupon.id
     cart.coupon = coupon
@@ -615,7 +635,7 @@ async def apply_cart_coupon(
     await session.commit()
     cart = await _reload_cart(session, cart.id)
     return {
-        "data": _cart_response(cart),
+        "data": await _cart_response(session, owner, cart),
         "meta": {"request_id": request.state.request_id},
     }
 
@@ -648,6 +668,6 @@ async def remove_cart_coupon(
     await session.commit()
     cart = await _reload_cart(session, cart.id)
     return {
-        "data": _cart_response(cart),
+        "data": await _cart_response(session, owner, cart),
         "meta": {"request_id": request.state.request_id},
     }

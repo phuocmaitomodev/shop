@@ -270,6 +270,56 @@ def test_cart_mutation_rejects_live_price_change(
     assert current["items"][0]["quantity"] == 1
 
 
+def test_price_changed_has_typed_remove_and_readd_recovery_flow(
+    cart_client: TestClient, auth_session_factory, cart_catalog
+) -> None:
+    added = cart_client.post(
+        "/api/v1/cart/items",
+        json={"variant_id": cart_catalog["variant_id"], "quantity": 1},
+    ).json()["data"]
+    item_id = added["items"][0]["item_id"]
+
+    async def change_price() -> None:
+        async with auth_session_factory() as session:
+            product = await session.get(Product, UUID(cart_catalog["product_id"]))
+            assert product is not None
+            product.sale_price = 240_000
+            await session.commit()
+
+    asyncio.run(change_price())
+    rejected = cart_client.patch(
+        f"/api/v1/cart/items/{item_id}",
+        json={"quantity": 2, "cart_version": added["version"]},
+    )
+    assert rejected.status_code == 409
+    assert rejected.json()["error"]["code"] == "PRICE_CHANGED"
+
+    refreshed = cart_client.get("/api/v1/cart").json()["data"]
+    assert refreshed["items"][0]["price_changed"] is True
+    assert refreshed["items"][0]["previous_unit_price"] == 250_000
+    assert refreshed["items"][0]["unit_price"] == 240_000
+    removed = cart_client.request(
+        "DELETE",
+        f"/api/v1/cart/items/{item_id}",
+        json={"cart_version": refreshed["version"]},
+    ).json()["data"]
+    recovered = cart_client.post(
+        "/api/v1/cart/items",
+        json={"variant_id": cart_catalog["variant_id"], "quantity": 1},
+    ).json()["data"]
+
+    assert recovered["version"] == removed["version"] + 1
+    assert recovered["items"][0]["previous_unit_price"] == 240_000
+    assert recovered["items"][0]["unit_price"] == 240_000
+    assert recovered["items"][0]["price_changed"] is False
+    accepted = cart_client.patch(
+        f"/api/v1/cart/items/{recovered['items'][0]['item_id']}",
+        json={"quantity": 2, "cart_version": recovered["version"]},
+    )
+    assert accepted.status_code == 200
+    assert accepted.json()["data"]["items"][0]["quantity"] == 2
+
+
 def test_guest_applies_valid_coupon_with_server_calculated_cap(
     cart_client: TestClient, cart_catalog, valid_coupon
 ) -> None:
@@ -578,6 +628,140 @@ def test_coupon_rejects_authenticated_owner_at_per_user_limit(
 
     assert response.status_code == 409
     assert response.json()["error"]["code"] == "COUPON_NOT_APPLICABLE"
+
+
+def test_login_claim_revalidates_guest_coupon_for_authenticated_owner(
+    cart_client: TestClient,
+    create_auth_user,
+    auth_session_factory,
+    cart_catalog,
+    valid_coupon,
+) -> None:
+    email = "coupon-claim-limit@example.com"
+    create_auth_user(email)
+    added = cart_client.post(
+        "/api/v1/cart/items",
+        json={"variant_id": cart_catalog["variant_id"], "quantity": 2},
+    ).json()["data"]
+    applied = cart_client.post(
+        "/api/v1/cart/coupon",
+        json={"code": "GIAM10", "cart_version": added["version"]},
+    ).json()["data"]
+    assert applied["discount_amount"] == 40_000
+
+    async def seed_authenticated_redemption() -> None:
+        async with auth_session_factory() as session:
+            user = await session.scalar(select(User).where(User.email == email))
+            coupon = await session.scalar(select(Coupon).where(Coupon.code == "GIAM10"))
+            assert user is not None and coupon is not None
+            order = Order(
+                order_code="ORDER-COUPON-CLAIM-LIMIT",
+                user_id=user.id,
+                coupon_id=coupon.id,
+                recipient_name="Người Dùng Kiểm Thử",
+                phone="0900000000",
+                address_line="1 Đường Kiểm Thử",
+                province="TP. Hồ Chí Minh",
+                payment_method="cod",
+                payment_status="cod_due",
+                subtotal=500_000,
+                discount_amount=40_000,
+                shipping_fee=0,
+                total=460_000,
+            )
+            session.add(order)
+            await session.flush()
+            session.add(
+                CouponRedemption(
+                    coupon_id=coupon.id,
+                    order_id=order.id,
+                    user_id=user.id,
+                    discount_amount=40_000,
+                )
+            )
+            await session.commit()
+
+    asyncio.run(seed_authenticated_redemption())
+    login = cart_client.post(
+        "/api/v1/auth/login",
+        json={"email": email, "password": "MatKhau-AnToan-123"},
+    )
+
+    assert login.status_code == 200
+    claimed = cart_client.get("/api/v1/cart").json()["data"]
+    assert claimed["coupon_code"] == "GIAM10"
+    assert claimed["discount_amount"] == 0
+    assert claimed["total"] == 500_000
+
+
+def test_cart_read_revalidates_coupon_after_owner_reaches_per_user_limit(
+    cart_client: TestClient,
+    create_auth_user,
+    auth_session_factory,
+    cart_catalog,
+    valid_coupon,
+) -> None:
+    email = "coupon-live-limit@example.com"
+    create_auth_user(email)
+    assert cart_client.post(
+        "/api/v1/auth/login",
+        json={"email": email, "password": "MatKhau-AnToan-123"},
+    ).status_code == 200
+    added = cart_client.post(
+        "/api/v1/cart/items",
+        json={"variant_id": cart_catalog["variant_id"], "quantity": 2},
+    ).json()["data"]
+    applied = cart_client.post(
+        "/api/v1/cart/coupon",
+        json={"code": "GIAM10", "cart_version": added["version"]},
+    ).json()["data"]
+    assert applied["discount_amount"] == 40_000
+
+    async def redeem_coupon_elsewhere() -> None:
+        async with auth_session_factory() as session:
+            user = await session.scalar(select(User).where(User.email == email))
+            coupon = await session.scalar(select(Coupon).where(Coupon.code == "GIAM10"))
+            assert user is not None and coupon is not None
+            order = Order(
+                order_code="ORDER-COUPON-LIVE-LIMIT",
+                user_id=user.id,
+                coupon_id=coupon.id,
+                recipient_name="Người Dùng Kiểm Thử",
+                phone="0900000000",
+                address_line="1 Đường Kiểm Thử",
+                province="TP. Hồ Chí Minh",
+                payment_method="cod",
+                payment_status="cod_due",
+                subtotal=500_000,
+                discount_amount=40_000,
+                shipping_fee=0,
+                total=460_000,
+            )
+            session.add(order)
+            await session.flush()
+            session.add(
+                CouponRedemption(
+                    coupon_id=coupon.id,
+                    order_id=order.id,
+                    user_id=user.id,
+                    discount_amount=40_000,
+                )
+            )
+            await session.commit()
+
+    asyncio.run(redeem_coupon_elsewhere())
+    current = cart_client.get("/api/v1/cart").json()["data"]
+
+    assert current["coupon_code"] == "GIAM10"
+    assert current["discount_amount"] == 0
+    assert current["total"] == 500_000
+    mutated = cart_client.patch(
+        f"/api/v1/cart/items/{current['items'][0]['item_id']}",
+        json={"quantity": 1, "cart_version": current["version"]},
+    ).json()["data"]
+    assert mutated["coupon_code"] == "GIAM10"
+    assert mutated["discount_amount"] == 0
+    assert mutated["total"] == 280_000
 
 
 def test_login_merge_keeps_positive_quantity_when_stock_drops_to_zero(

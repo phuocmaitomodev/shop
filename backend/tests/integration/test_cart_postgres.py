@@ -5,11 +5,14 @@ from uuid import UUID, uuid4
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
+from app.core.security import hash_password
 from app.main import create_app
+from app.models.auth import User
 from app.models.catalog import Category, Color, Product, ProductVariant, Size
-from app.models.commerce import Coupon
+from app.models.commerce import Coupon, CouponRedemption, Order
 from tests.integration.database_guard import require_fresh_migrated_database
 
 MIGRATION_DATABASE_URL = os.getenv("MIGRATION_DATABASE_URL")
@@ -23,7 +26,7 @@ def test_postgres_cart_ownership_concurrency_live_data_and_coupon_boundaries() -
     assert MIGRATION_DATABASE_URL is not None
     require_fresh_migrated_database(MIGRATION_DATABASE_URL)
 
-    async def seed() -> tuple[str, str]:
+    async def seed() -> tuple[str, str, str, str]:
         engine = create_async_engine(MIGRATION_DATABASE_URL)
         session_factory = async_sessionmaker(engine, expire_on_commit=False)
         suffix = uuid4().hex
@@ -52,14 +55,32 @@ def test_postgres_cart_ownership_concurrency_live_data_and_coupon_boundaries() -
                 discount_value=10,
                 max_discount=40_000,
                 min_subtotal=400_000,
+                per_user_limit=1,
             )
-            session.add_all([category, color, size, product, variant, coupon])
+            live_coupon = Coupon(
+                code=f"PGLIVE10-{suffix}",
+                discount_type="percent",
+                discount_value=10,
+                max_discount=40_000,
+                min_subtotal=400_000,
+                per_user_limit=1,
+            )
+            email = f"cart-pg-owner-{suffix}@example.com"
+            user = User(
+                email=email,
+                password_hash=hash_password("MatKhau-AnToan-123"),
+                full_name="Khách PostgreSQL",
+                role="customer",
+            )
+            session.add_all(
+                [category, color, size, product, variant, coupon, live_coupon, user]
+            )
             await session.commit()
-            result = str(variant.id), coupon.code
+            result = str(variant.id), coupon.code, live_coupon.code, email
         await engine.dispose()
         return result
 
-    variant_id, coupon_code = asyncio.run(seed())
+    variant_id, coupon_code, live_coupon_code, owner_email = asyncio.run(seed())
     application = create_app()
     with TestClient(application) as owner:
         added = owner.post(
@@ -137,6 +158,62 @@ def test_postgres_cart_ownership_concurrency_live_data_and_coupon_boundaries() -
         totals = applied.json()["data"]
         assert (totals["subtotal"], totals["discount_amount"]) == (480_000, 40_000)
         assert (totals["shipping_fee"], totals["total"]) == (30_000, 470_000)
+
+        async def redeem_for_owner(code: str, order_code: str) -> None:
+            engine = create_async_engine(MIGRATION_DATABASE_URL)
+            session_factory = async_sessionmaker(engine, expire_on_commit=False)
+            async with session_factory() as session:
+                user = await session.scalar(select(User).where(User.email == owner_email))
+                coupon = await session.scalar(select(Coupon).where(Coupon.code == code))
+                assert user is not None and coupon is not None
+                order = Order(
+                    order_code=order_code,
+                    user_id=user.id,
+                    coupon_id=coupon.id,
+                    recipient_name="Khách PostgreSQL",
+                    phone="0900000000",
+                    address_line="1 Đường PostgreSQL",
+                    province="TP. Hồ Chí Minh",
+                    payment_method="cod",
+                    payment_status="cod_due",
+                    subtotal=480_000,
+                    discount_amount=40_000,
+                    shipping_fee=30_000,
+                    total=470_000,
+                )
+                session.add(order)
+                await session.flush()
+                session.add(
+                    CouponRedemption(
+                        coupon_id=coupon.id,
+                        order_id=order.id,
+                        user_id=user.id,
+                        discount_amount=40_000,
+                    )
+                )
+                await session.commit()
+            await engine.dispose()
+
+        asyncio.run(redeem_for_owner(coupon_code, f"PGC-{uuid4().hex}"))
+        login = owner.post(
+            "/api/v1/auth/login",
+            json={"email": owner_email, "password": "MatKhau-AnToan-123"},
+        )
+        assert login.status_code == 200
+        claimed = owner.get("/api/v1/cart").json()["data"]
+        assert claimed["coupon_code"] == coupon_code
+        assert claimed["discount_amount"] == 0
+
+        reapplied = owner.post(
+            "/api/v1/cart/coupon",
+            json={"code": live_coupon_code, "cart_version": claimed["version"]},
+        )
+        assert reapplied.status_code == 200
+        assert reapplied.json()["data"]["discount_amount"] == 40_000
+        asyncio.run(redeem_for_owner(live_coupon_code, f"PGL-{uuid4().hex}"))
+        live_limited = owner.get("/api/v1/cart").json()["data"]
+        assert live_limited["coupon_code"] == live_coupon_code
+        assert live_limited["discount_amount"] == 0
 
         asyncio.run(change_variant(active=False))
         owner.cookies.delete("shop_guest")
