@@ -90,16 +90,21 @@ class Cart(CommerceTimestampMixin, Base):
         String(20), default="active", server_default="active"
     )
     version: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
+    coupon_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("coupons.id", ondelete="SET NULL"), nullable=True
+    )
 
     items: Mapped[list["CartItem"]] = relationship(
         back_populates="cart", cascade="all, delete-orphan"
     )
+    coupon: Mapped["Coupon | None"] = relationship()
 
 
 class CartItem(CommerceTimestampMixin, Base):
     __tablename__ = "cart_items"
     __table_args__ = (
         CheckConstraint("quantity > 0", name="quantity_positive"),
+        CheckConstraint("unit_price >= 0", name="unit_price_non_negative"),
         UniqueConstraint("cart_id", "variant_id", name="uq_cart_items_cart_variant"),
     )
 
@@ -111,6 +116,7 @@ class CartItem(CommerceTimestampMixin, Base):
         ForeignKey("product_variants.id", ondelete="RESTRICT"), index=True
     )
     quantity: Mapped[int] = mapped_column(Integer)
+    unit_price: Mapped[int] = mapped_column(BigInteger)
 
     cart: Mapped[Cart] = relationship(back_populates="items")
     variant = relationship("ProductVariant")

@@ -120,6 +120,43 @@ def test_openapi_contains_be05_public_catalog_endpoints(client: TestClient) -> N
     )
 
 
+def test_openapi_contains_cart_coupon_contract(client: TestClient) -> None:
+    schema = client.get("/openapi.json").json()
+    paths = schema["paths"]
+    expected = {
+        "/api/v1/cart": {"get"},
+        "/api/v1/cart/items": {"post"},
+        "/api/v1/cart/items/{item_id}": {"patch", "delete"},
+        "/api/v1/cart/coupon": {"post", "delete"},
+    }
+    for path, methods in expected.items():
+        assert methods <= set(paths[path])
+        for method in methods:
+            operation = paths[path][method]
+            assert operation["responses"]["200" if method != "post" or path.endswith("coupon") else "201"]["content"]["application/json"]["schema"]["$ref"] == "#/components/schemas/CartEnvelope"
+            if method != "get":
+                assert operation["responses"]["409"]["content"]["application/json"]["schema"]["$ref"] == "#/components/schemas/ErrorEnvelope"
+    assert paths["/api/v1/cart/coupon"]["post"]["responses"]["404"]["content"][
+        "application/json"
+    ]["schema"]["$ref"] == "#/components/schemas/ErrorEnvelope"
+
+    cart_schema = schema["components"]["schemas"]["CartResponse"]
+    assert {
+        "cart_id",
+        "version",
+        "items",
+        "subtotal",
+        "discount_amount",
+        "shipping_fee",
+        "total",
+        "currency",
+    } <= set(cart_schema["required"])
+    assert schema["components"]["schemas"]["CartItemUpdateRequest"]["required"] == [
+        "quantity",
+        "cart_version",
+    ]
+
+
 def test_openapi_contains_admin_knowledge_and_index_status_contract(
     client: TestClient,
 ) -> None:

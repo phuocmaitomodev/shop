@@ -85,6 +85,9 @@ def test_commerce_metadata_defines_required_tables() -> None:
         "system_settings",
     } <= set(metadata.tables)
 
+    assert metadata.tables["carts"].c.coupon_id.nullable is True
+    assert metadata.tables["cart_items"].c.unit_price.nullable is False
+
 
 def test_confirmation_and_refund_metadata_enforce_locked_security_contract() -> None:
     confirmation = metadata.tables["action_confirmations"]
@@ -121,10 +124,10 @@ def test_alembic_has_single_loadable_commerce_head_that_enables_pgvector(
     scripts = ScriptDirectory.from_config(config)
 
     heads = scripts.get_heads()
-    assert heads == ["0006_commerce_foundation"]
+    assert heads == ["0007_cart_pricing"]
 
-    commerce_revision = scripts.get_revision(heads[0])
-    assert commerce_revision.down_revision == "0005_rag_chunks"
+    cart_revision = scripts.get_revision(heads[0])
+    assert cart_revision.down_revision == "0006_commerce_foundation"
 
     revision = scripts.get_revision("0001_enable_pgvector")
     executed_sql = []

@@ -13,6 +13,8 @@ def test_settings_are_loaded_from_environment(monkeypatch) -> None:
     monkeypatch.setenv("PASSWORD_RESET_TTL_MINUTES", "20")
     monkeypatch.setenv("GUEST_COOKIE_NAME", "shop_guest_test")
     monkeypatch.setenv("GUEST_TOKEN_TTL_DAYS", "45")
+    monkeypatch.setenv("SHIPPING_FLAT_FEE", "35000")
+    monkeypatch.setenv("FREE_SHIPPING_THRESHOLD", "600000")
     monkeypatch.setenv("ACTION_CONFIRMATION_TTL_SECONDS", "240")
     monkeypatch.setenv("IDEMPOTENCY_TTL_HOURS", "12")
 
@@ -26,6 +28,8 @@ def test_settings_are_loaded_from_environment(monkeypatch) -> None:
     assert settings.password_reset_ttl_minutes == 20
     assert settings.guest_cookie_name == "shop_guest_test"
     assert settings.guest_token_ttl_days == 45
+    assert settings.shipping_flat_fee == 35_000
+    assert settings.free_shipping_threshold == 600_000
     assert settings.action_confirmation_ttl_seconds == 240
     assert settings.idempotency_ttl_hours == 12
 

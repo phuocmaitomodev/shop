@@ -1,0 +1,147 @@
+import asyncio
+import os
+from concurrent.futures import ThreadPoolExecutor
+from uuid import UUID, uuid4
+
+import pytest
+from fastapi.testclient import TestClient
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+from app.main import create_app
+from app.models.catalog import Category, Color, Product, ProductVariant, Size
+from app.models.commerce import Coupon
+from tests.integration.database_guard import require_fresh_migrated_database
+
+MIGRATION_DATABASE_URL = os.getenv("MIGRATION_DATABASE_URL")
+pytestmark = pytest.mark.skipif(
+    not MIGRATION_DATABASE_URL,
+    reason="MIGRATION_DATABASE_URL is required for PostgreSQL cart integration tests",
+)
+
+
+def test_postgres_cart_ownership_concurrency_live_data_and_coupon_boundaries() -> None:
+    assert MIGRATION_DATABASE_URL is not None
+    require_fresh_migrated_database(MIGRATION_DATABASE_URL)
+
+    async def seed() -> tuple[str, str]:
+        engine = create_async_engine(MIGRATION_DATABASE_URL)
+        session_factory = async_sessionmaker(engine, expire_on_commit=False)
+        suffix = uuid4().hex
+        async with session_factory() as session:
+            category = Category(name="Áo cart PG", slug=f"cart-pg-{suffix}")
+            color = Color(name="Đen", slug=f"cart-pg-black-{suffix}")
+            size = Size(code=f"PG-{suffix[:8]}", name="PG")
+            product = Product(
+                category=category,
+                sku=f"CART-PG-{suffix}",
+                slug=f"cart-pg-product-{suffix}",
+                name="Sản phẩm cart PostgreSQL",
+                price=300_000,
+                sale_price=250_000,
+            )
+            variant = ProductVariant(
+                product=product,
+                color=color,
+                size=size,
+                variant_sku=f"CART-PG-VARIANT-{suffix}",
+                stock_quantity=5,
+            )
+            coupon = Coupon(
+                code=f"PG10-{suffix}",
+                discount_type="percent",
+                discount_value=10,
+                max_discount=40_000,
+                min_subtotal=400_000,
+            )
+            session.add_all([category, color, size, product, variant, coupon])
+            await session.commit()
+            result = str(variant.id), coupon.code
+        await engine.dispose()
+        return result
+
+    variant_id, coupon_code = asyncio.run(seed())
+    application = create_app()
+    with TestClient(application) as owner:
+        added = owner.post(
+            "/api/v1/cart/items", json={"variant_id": variant_id, "quantity": 1}
+        ).json()["data"]
+        item_id = added["items"][0]["item_id"]
+        guest_token = owner.cookies["shop_guest"]
+
+        def mutate(quantity: int) -> tuple[int, str | None]:
+            response = owner.patch(
+                f"/api/v1/cart/items/{item_id}",
+                json={"quantity": quantity, "cart_version": added["version"]},
+            )
+            body = response.json()
+            return response.status_code, body.get("error", {}).get("code")
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            outcomes = list(executor.map(mutate, (2, 3)))
+        assert sorted(status_code for status_code, _ in outcomes) == [200, 409]
+        assert {code for _, code in outcomes if code} == {"CART_VERSION_CONFLICT"}
+
+        owner.cookies.delete("shop_guest")
+        denied = owner.patch(
+            f"/api/v1/cart/items/{item_id}",
+            json={"quantity": 1, "cart_version": added["version"] + 1},
+        )
+        assert denied.status_code == 404
+        assert denied.json()["error"]["code"] == "CART_ITEM_NOT_FOUND"
+        owner.cookies.set("shop_guest", guest_token)
+
+        async def change_variant(*, stock: int | None = None, price: int | None = None, active: bool | None = None) -> None:
+            engine = create_async_engine(MIGRATION_DATABASE_URL)
+            session_factory = async_sessionmaker(engine, expire_on_commit=False)
+            async with session_factory() as session:
+                variant = await session.get(ProductVariant, UUID(variant_id))
+                assert variant is not None
+                if stock is not None:
+                    variant.stock_quantity = stock
+                if active is not None:
+                    variant.is_active = active
+                if price is not None:
+                    product = await session.get(Product, variant.product_id)
+                    assert product is not None
+                    product.sale_price = price
+                await session.commit()
+            await engine.dispose()
+
+        asyncio.run(change_variant(stock=0))
+        current = owner.get("/api/v1/cart").json()["data"]
+        assert current["items"][0]["is_available"] is False
+        out_of_stock = owner.patch(
+            f"/api/v1/cart/items/{item_id}",
+            json={"quantity": 1, "cart_version": current["version"]},
+        )
+        assert out_of_stock.status_code == 409
+        assert out_of_stock.json()["error"]["code"] == "OUT_OF_STOCK"
+
+        asyncio.run(change_variant(stock=5, price=240_000))
+        price_changed = owner.patch(
+            f"/api/v1/cart/items/{item_id}",
+            json={"quantity": 1, "cart_version": current["version"]},
+        )
+        assert price_changed.status_code == 409
+        assert price_changed.json()["error"]["code"] == "PRICE_CHANGED"
+
+        owner.cookies.delete("shop_guest")
+        coupon_cart = owner.post(
+            "/api/v1/cart/items", json={"variant_id": variant_id, "quantity": 2}
+        ).json()["data"]
+        applied = owner.post(
+            "/api/v1/cart/coupon",
+            json={"code": coupon_code, "cart_version": coupon_cart["version"]},
+        )
+        assert applied.status_code == 200
+        totals = applied.json()["data"]
+        assert (totals["subtotal"], totals["discount_amount"]) == (480_000, 40_000)
+        assert (totals["shipping_fee"], totals["total"]) == (30_000, 470_000)
+
+        asyncio.run(change_variant(active=False))
+        owner.cookies.delete("shop_guest")
+        unavailable = owner.post(
+            "/api/v1/cart/items", json={"variant_id": variant_id, "quantity": 1}
+        )
+        assert unavailable.status_code == 404
+        assert unavailable.json()["error"]["code"] == "VARIANT_NOT_AVAILABLE"

@@ -70,6 +70,22 @@ This deletes all commerce tables and their data. For a full local reset, use
 `docker compose down --volumes`, recreate `db`, then run `alembic upgrade head`.
 Do not use either destructive command on a shared database.
 
+### Cart, pricing and coupon API
+
+Migration `0007_cart_pricing` adds the applied coupon reference and the integer-VND
+price snapshot used to detect `PRICE_CHANGED`. The public `/api/v1/cart` endpoints
+support guest and authenticated carts, item add/update/delete, and coupon
+apply/remove. Guest access uses the `GUEST_COOKIE_NAME` HttpOnly cookie; only its
+SHA-256 hash is persisted. Login claims or deterministically merges that guest cart
+in the same transaction and then clears the guest cookie.
+
+Every cart response hydrates current product/variant/color/size/stock and price from
+PostgreSQL, calculates subtotal, discount, shipping and total on the server, and
+returns integer VND. `PATCH`/`DELETE` and coupon mutations require the latest
+`cart_version`; stale requests return `CART_VERSION_CONFLICT`. Shipping uses
+`SHIPPING_FLAT_FEE` and `FREE_SHIPPING_THRESHOLD`. Cart stock checks do not reserve
+inventory; checkout remains responsible for locking and revalidating stock.
+
 The local password-reset demo sends no email and never returns the reset token from an API response. The `forgot-password` response is identical for existing and unknown email addresses. After requesting a reset for a known local demo account, retrieve its short-lived token from the trusted local container shell:
 
 ```bash

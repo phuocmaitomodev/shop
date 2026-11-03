@@ -17,6 +17,8 @@ class Settings(BaseSettings):
     auth_cookie_secure: bool = False
     guest_cookie_name: str = "shop_guest"
     guest_token_ttl_days: int = Field(default=30, gt=0)
+    shipping_flat_fee: int = Field(default=30_000, ge=0)
+    free_shipping_threshold: int = Field(default=500_000, ge=0)
     action_confirmation_ttl_seconds: int = Field(default=300, gt=0, le=300)
     idempotency_ttl_hours: int = Field(default=24, gt=0)
     password_reset_ttl_minutes: int = Field(default=30, gt=0)

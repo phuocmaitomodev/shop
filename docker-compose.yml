@@ -32,6 +32,8 @@ services:
       AUTH_COOKIE_SECURE: ${AUTH_COOKIE_SECURE:-false}
       GUEST_COOKIE_NAME: ${GUEST_COOKIE_NAME:-shop_guest}
       GUEST_TOKEN_TTL_DAYS: ${GUEST_TOKEN_TTL_DAYS:-30}
+      SHIPPING_FLAT_FEE: ${SHIPPING_FLAT_FEE:-30000}
+      FREE_SHIPPING_THRESHOLD: ${FREE_SHIPPING_THRESHOLD:-500000}
       ACTION_CONFIRMATION_TTL_SECONDS: ${ACTION_CONFIRMATION_TTL_SECONDS:-300}
       IDEMPOTENCY_TTL_HOURS: ${IDEMPOTENCY_TTL_HOURS:-24}
       PASSWORD_RESET_TTL_MINUTES: ${PASSWORD_RESET_TTL_MINUTES:-30}
@@ -93,6 +95,7 @@ services:
         "-W",
         "error",
         "tests/integration/test_postgres_migrations.py",
+        "tests/integration/test_cart_postgres.py",
         "tests/integration/test_return_policy_lifecycle_postgres.py",
         "tests/integration/test_product_projection_postgres.py",
         "tests/test_rag_index_postgres.py",
