@@ -145,7 +145,7 @@ class ChatSourceResponse(BaseModel):
     title: str
 
 
-class ChatProposedActionResponse(BaseModel):
+class ProposedActionResponse(BaseModel):
     action: Literal[
         "cart_add",
         "cart_update",
@@ -168,7 +168,7 @@ class ChatResponse(BaseModel):
     status: Literal[
         "ok", "insufficient_data", "out_of_scope", "provider_unavailable"
     ]
-    proposed_action: ChatProposedActionResponse | None = None
+    proposed_action: ProposedActionResponse | None = None
 
 
 class ChatEnvelope(BaseModel):

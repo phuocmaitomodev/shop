@@ -10,6 +10,8 @@ from app.commerce.chat_actions import DatabaseChatActionAdapter
 from app.db.session import get_db_session
 from app.rag.chat import (
     ChatHistoryTurn,
+    CommerceOwnershipContext,
+    CommerceReadRepository,
     DeterministicChatProvider,
     GeminiChatProvider,
     orchestrate_chat,
@@ -20,6 +22,18 @@ from app.schemas.common import ErrorEnvelope
 
 
 router = APIRouter(tags=["chat"])
+
+
+def get_commerce_read_repository() -> CommerceReadRepository | None:
+    """Integration seam until the commerce backend publishes its repository."""
+
+    return None
+
+
+def get_commerce_ownership_context() -> CommerceOwnershipContext | None:
+    """Integration seam for server-derived user/guest ownership evidence."""
+
+    return None
 
 
 def _chat_provider(settings: Settings):
@@ -72,6 +86,12 @@ async def chat(
     ),
     session: AsyncSession = Depends(get_db_session),
     settings: Settings = Depends(get_settings),
+    commerce_repository: CommerceReadRepository | None = Depends(
+        get_commerce_read_repository
+    ),
+    ownership_context: CommerceOwnershipContext | None = Depends(
+        get_commerce_ownership_context
+    ),
 ) -> dict:
     client_host = request.client.host if request.client is not None else "unknown"
     limiter: InMemoryRateLimiter = request.app.state.chat_rate_limiter
@@ -132,6 +152,8 @@ async def chat(
         ),
         chat_provider=_chat_provider(settings),
         embedding_provider=_embedding_provider(settings),
+        commerce_repository=commerce_repository,
+        ownership_context=ownership_context,
     )
     return {
         "data": ChatResponse(
@@ -139,7 +161,7 @@ async def chat(
             products=[asdict(product) for product in result.products],
             sources=[asdict(source) for source in result.sources],
             status=result.status,
-            proposed_action=None,
+            proposed_action=result.proposed_action,
         ),
         "meta": {"request_id": request.state.request_id},
     }

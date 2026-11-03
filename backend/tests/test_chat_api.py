@@ -653,6 +653,8 @@ def _client(monkeypatch) -> TestClient:
     async def fake_orchestrate(**kwargs):
         assert kwargs["message"] == "Tìm áo thun đen"
         assert kwargs["history"][0].role == "user"
+        assert "commerce_repository" in kwargs
+        assert "ownership_context" in kwargs
         return ChatResult(
             answer="Áo thun đen: 249.000 ₫; còn hàng.",
             products=[
@@ -701,6 +703,7 @@ def test_chat_endpoint_contract_and_hydrated_response(monkeypatch) -> None:
     assert response.status_code == 200
     payload = response.json()
     assert payload["data"]["status"] == "ok"
+    assert payload["data"]["proposed_action"] is None
     assert payload["data"]["products"][0]["id"] == str(PRODUCT_ID)
     assert payload["data"]["products"][0]["url"] == "/san-pham/ao-thun-den"
     assert payload["data"]["sources"][0] == {
@@ -818,6 +821,18 @@ def test_openapi_exposes_public_bounded_chat_contract(client: TestClient) -> Non
         "product",
         "knowledge",
     }
+    proposed_action = schema["components"]["schemas"]["ProposedActionResponse"]
+    assert set(proposed_action["required"]) == {
+        "action",
+        "resource_code",
+        "summary",
+        "requires_confirmation",
+        "confirmation_token",
+        "expires_at",
+    }
+    assert "proposed_action" in schema["components"]["schemas"]["ChatResponse"][
+        "properties"
+    ]
 
 
 def test_chat_endpoint_rate_limits_public_provider_calls(monkeypatch) -> None:
