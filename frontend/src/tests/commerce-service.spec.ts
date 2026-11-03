@@ -201,10 +201,38 @@ describe('commerce service contract', () => {
     ])
   })
 
-  it('requests a server-bound one-time confirmation', async () => {
+  it('sends guest ownership when requesting a server-bound cancellation confirmation', async () => {
     apiClientMock.mockResolvedValue({ data: { confirmation_token: 'secret', expires_at: '2026-11-03T12:00:00Z' }, meta: { request_id: 'confirmation' } })
     const payload = { reason: null }
-    await createActionConfirmation('order_cancel', 'DH-001', payload)
+    await createActionConfirmation('order_cancel', 'DH-001', payload, {
+      mode: 'guest',
+      lookup_token: 'lookup-secret',
+    })
+    expect(apiClientMock).toHaveBeenCalledWith('/action-confirmations', {
+      method: 'POST',
+      headers: { 'X-Order-Lookup-Token': 'lookup-secret' },
+      body: JSON.stringify({ action: 'order_cancel', resource_key: 'DH-001', payload }),
+    })
+  })
+
+  it('omits guest ownership when requesting a checkout confirmation', async () => {
+    apiClientMock.mockResolvedValue({ data: { confirmation_token: 'secret', expires_at: '2026-11-03T12:00:00Z' }, meta: { request_id: 'confirmation' } })
+    const payload = { cart_version: 3 }
+
+    await createActionConfirmation('order_create', 'cart-1', payload)
+
+    expect(apiClientMock).toHaveBeenCalledWith('/action-confirmations', {
+      method: 'POST',
+      body: JSON.stringify({ action: 'order_create', resource_key: 'cart-1', payload }),
+    })
+  })
+
+  it('omits guest ownership for an authenticated cancellation confirmation', async () => {
+    apiClientMock.mockResolvedValue({ data: { confirmation_token: 'secret', expires_at: '2026-11-03T12:00:00Z' }, meta: { request_id: 'confirmation' } })
+    const payload = { reason: null }
+
+    await createActionConfirmation('order_cancel', 'DH-001', payload, { mode: 'authenticated' })
+
     expect(apiClientMock).toHaveBeenCalledWith('/action-confirmations', {
       method: 'POST',
       body: JSON.stringify({ action: 'order_cancel', resource_key: 'DH-001', payload }),

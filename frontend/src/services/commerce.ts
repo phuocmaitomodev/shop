@@ -47,13 +47,19 @@ export const removeCartCoupon = (cartVersion: number) => (
   cartMutation('/cart/coupon', 'DELETE', { cart_version: cartVersion })
 )
 
+const ownershipHeaders = (access: OrderAccessContext): Record<string, string> => (
+  access.mode === 'guest' ? { 'X-Order-Lookup-Token': access.lookup_token } : {}
+)
+
 export const createActionConfirmation = async (
   action: ConfirmationAction,
   resourceKey: string,
   payload: Record<string, unknown>,
+  access: OrderAccessContext = { mode: 'authenticated' },
 ): Promise<ConfirmationResponse> => {
   const response = await apiClient<ApiSuccess<ConfirmationResponse>>('/action-confirmations', {
     method: 'POST',
+    ...(access.mode === 'guest' ? { headers: ownershipHeaders(access) } : {}),
     body: JSON.stringify({ action, resource_key: resourceKey, payload }),
   })
   return response.data
@@ -81,10 +87,6 @@ export const lookupGuestOrder = async (
   })
   return response.data
 }
-
-const ownershipHeaders = (access: OrderAccessContext): Record<string, string> => (
-  access.mode === 'guest' ? { 'X-Order-Lookup-Token': access.lookup_token } : {}
-)
 
 const orderPath = (orderCode: string, suffix = '') => (
   `/orders/${encodeURIComponent(orderCode)}${suffix}`

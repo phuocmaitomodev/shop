@@ -61,7 +61,31 @@ describe('order lookup and detail UI', () => {
     await flushPromises()
 
     const payload = { reason_code: 'manufacturer_fault', reason_detail: 'Sản phẩm lỗi đường may' }
-    expect(mocks.createActionConfirmation).toHaveBeenCalledWith('refund_request', 'DH-001', payload)
+    expect(mocks.createActionConfirmation).toHaveBeenCalledWith('refund_request', 'DH-001', payload, access.access)
     expect(mocks.createRefundRequest).toHaveBeenCalledWith('DH-001', { ...payload, confirmation_token: 'confirmation-token-long' }, expect.stringMatching(/^refund-/), access.access)
+  })
+
+  it('uses guest ownership when requesting a cancellation confirmation', async () => {
+    const cancellableOrder = { ...order, status: 'confirmed' }
+    const access = { order: cancellableOrder, access: { mode: 'guest', lookup_token: 'secret-token-long-enough' } }
+    mocks.useOrderAccess.mockReturnValue(access)
+    mocks.getPaymentDemo.mockResolvedValue(order.payment)
+    mocks.getLatestRefundRequest.mockResolvedValue(null)
+    mocks.createActionConfirmation.mockResolvedValue({ confirmation_token: 'confirmation-token-long', expires_at: '2026-11-03T12:00:00Z' })
+    mocks.cancelOrder.mockResolvedValue({ ...cancellableOrder, status: 'cancelled' })
+    const wrapper = mount(OrderDetailPage)
+    await flushPromises()
+
+    await wrapper.get('#cancel-reason').setValue('Đổi ý')
+    await wrapper.get('input[type="checkbox"]').setValue(true)
+    await wrapper.get('form').trigger('submit')
+    await flushPromises()
+
+    expect(mocks.createActionConfirmation).toHaveBeenCalledWith(
+      'order_cancel',
+      'DH-001',
+      { reason: 'Đổi ý' },
+      access.access,
+    )
   })
 })

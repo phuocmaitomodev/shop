@@ -38,7 +38,7 @@ const cancel = async () => {
   busy.value = true; errorMessage.value = ''
   const payload = { reason: cancelReason.value.trim() || null }
   try {
-    const confirmation = await createActionConfirmation('order_cancel', order.value.order_code, payload)
+    const confirmation = await createActionConfirmation('order_cancel', order.value.order_code, payload, access.value)
     order.value = await cancelOrder(order.value.order_code, confirmation.confirmation_token, makeKey('cancel'), access.value, payload.reason)
     successMessage.value = 'Đơn hàng đã được hủy. Tồn kho được máy chủ xử lý đúng một lần.'
   } catch { errorMessage.value = 'Không thể hủy đơn. Trạng thái có thể đã thay đổi hoặc xác nhận đã hết hạn.' } finally { busy.value = false }
@@ -49,7 +49,7 @@ const requestRefund = async () => {
   busy.value = true; errorMessage.value = ''
   const payload = { reason_code: refundForm.reason_code, reason_detail: refundForm.reason_detail.trim() || null }
   try {
-    const confirmation = await createActionConfirmation('refund_request', order.value.order_code, payload)
+    const confirmation = await createActionConfirmation('refund_request', order.value.order_code, payload, access.value)
     refund.value = await createRefundRequest(order.value.order_code, { ...payload, confirmation_token: confirmation.confirmation_token }, makeKey('refund'), access.value)
     successMessage.value = 'Đã tạo yêu cầu hoàn tiền mô phỏng. Không có giao dịch ngân hàng thật.'
   } catch { errorMessage.value = 'Không thể tạo yêu cầu hoàn tiền mô phỏng. Vui lòng kiểm tra trạng thái đơn.' } finally { busy.value = false }
