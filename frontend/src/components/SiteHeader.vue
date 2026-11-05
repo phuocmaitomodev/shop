@@ -1,9 +1,16 @@
 <script setup lang="ts">
 import { storeToRefs } from 'pinia'
+import { onMounted } from 'vue'
+
+import { useCartCountStore } from '../stores/cart-count'
 import { useUiStore } from '../stores/ui'
 
+const cartCountStore = useCartCountStore()
 const uiStore = useUiStore()
+const { itemCount } = storeToRefs(cartCountStore)
 const { isNavigationOpen } = storeToRefs(uiStore)
+
+onMounted(cartCountStore.loadCartCount)
 </script>
 
 <template>
@@ -37,13 +44,13 @@ const { isNavigationOpen } = storeToRefs(uiStore)
         <RouterLink to="/lien-he">Liên hệ</RouterLink>
         <div class="primary-nav__mobile-actions">
           <RouterLink to="/tai-khoan">Tài khoản</RouterLink>
-          <RouterLink to="/gio-hang">Giỏ hàng (0)</RouterLink>
+          <RouterLink to="/gio-hang">Giỏ hàng ({{ itemCount }})</RouterLink>
         </div>
       </nav>
 
       <div class="header-actions" aria-label="Tiện ích">
         <RouterLink to="/tai-khoan">Tài khoản</RouterLink>
-        <RouterLink class="cart-link" to="/gio-hang">Giỏ hàng <span aria-hidden="true">(0)</span></RouterLink>
+        <RouterLink class="cart-link" to="/gio-hang">Giỏ hàng <span aria-hidden="true">({{ itemCount }})</span></RouterLink>
       </div>
     </div>
 

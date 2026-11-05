@@ -1,9 +1,11 @@
 import { flushPromises, mount } from '@vue/test-utils'
+import { createPinia } from 'pinia'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import ProductCard from '../components/catalog/ProductCard.vue'
 import { getProduct } from '../services/catalog'
 import { addCartItem } from '../services/commerce'
+import { useCartCountStore } from '../stores/cart-count'
 import type { ProductCardData, ProductDetail } from '../types/catalog'
 
 vi.mock('../services/catalog', () => ({
@@ -56,9 +58,10 @@ const detail: ProductDetail = {
   }],
 }
 
-const mountCard = (product: ProductCardData = card) => mount(ProductCard, {
+const mountCard = (product: ProductCardData = card, pinia = createPinia()) => mount(ProductCard, {
   props: { product },
   global: {
+    plugins: [pinia],
     stubs: {
       RouterLink: { props: ['to'], template: '<a :href="to"><slot /></a>' },
     },
@@ -93,5 +96,22 @@ describe('ProductCard add to cart', () => {
     const wrapper = mountCard({ ...card, in_stock: false })
 
     expect(wrapper.get('[data-testid="quick-add-open"]').attributes('disabled')).toBeDefined()
+  })
+
+  it('syncs the shared count from the quick-add cart response', async () => {
+    vi.mocked(getProduct).mockResolvedValue({ ...detail, variants: [detail.variants[0]!] })
+    vi.mocked(addCartItem).mockResolvedValue({
+      cart_id: 'cart-1', version: 2, items: [], item_count: 4, coupon_code: null,
+      subtotal: 0, discount_amount: 0, shipping_fee: 0, total: 0, currency: 'VND',
+    })
+    const pinia = createPinia()
+    const wrapper = mountCard(card, pinia)
+
+    await wrapper.get('[data-testid="quick-add-open"]').trigger('click')
+    await flushPromises()
+    await wrapper.get('[data-testid="quick-add-confirm"]').trigger('click')
+    await flushPromises()
+
+    expect(useCartCountStore(pinia).itemCount).toBe(4)
   })
 })

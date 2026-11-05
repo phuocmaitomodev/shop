@@ -3,6 +3,7 @@ import { computed, ref } from 'vue'
 
 import { getProduct } from '../../services/catalog'
 import { addCartItem } from '../../services/commerce'
+import { useCartCountStore } from '../../stores/cart-count'
 import type { ProductCardData, ProductColor, ProductVariant } from '../../types/catalog'
 import ProductImage from './ProductImage.vue'
 import ProductPrice from './ProductPrice.vue'
@@ -56,7 +57,8 @@ const confirmQuickAdd = async () => {
   quickAddError.value = ''
   adding.value = true
   try {
-    await addCartItem({ variant_id: selectedVariantId.value, quantity: 1 })
+    const cart = await addCartItem({ variant_id: selectedVariantId.value, quantity: 1 })
+    useCartCountStore().syncCart(cart)
     quickAddMessage.value = 'Đã thêm vào giỏ hàng.'
   } catch {
     quickAddError.value = 'Không thể thêm vào giỏ. Tồn kho có thể vừa thay đổi.'

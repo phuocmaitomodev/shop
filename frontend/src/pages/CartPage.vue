@@ -2,8 +2,10 @@
 import { onMounted, reactive, ref } from 'vue'
 import { ApiClientError } from '../services/api-client'
 import { applyCartCoupon, getCart, removeCartCoupon, removeCartItem, updateCartItem } from '../services/commerce'
+import { useCartCountStore } from '../stores/cart-count'
 import type { Cart } from '../types/commerce'
 
+const cartCountStore = useCartCountStore()
 const cart = ref<Cart | null>(null)
 const loading = ref(true)
 const busy = ref(false)
@@ -15,13 +17,17 @@ const money = new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND
 
 const sync = (value: Cart) => {
   cart.value = value
+  cartCountStore.syncCart(value)
   value.items.forEach((item) => { quantities[item.item_id] = item.quantity })
 }
 
 const load = async () => {
   loading.value = true
   errorMessage.value = ''
-  try { sync(await getCart()) } catch { errorMessage.value = 'Không thể tải giỏ hàng. Vui lòng thử lại.' } finally { loading.value = false }
+  try {
+    const value = await getCart()
+    sync(value)
+  } catch { errorMessage.value = 'Không thể tải giỏ hàng. Vui lòng thử lại.' } finally { loading.value = false }
 }
 
 const fallbackErrorCode = (error: unknown) => {

@@ -1,4 +1,5 @@
 import { flushPromises, mount } from '@vue/test-utils'
+import { createPinia } from 'pinia'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const commerce = vi.hoisted(() => ({
@@ -11,6 +12,7 @@ const commerce = vi.hoisted(() => ({
 vi.mock('../services/commerce', () => commerce)
 
 import CartPage from '../pages/CartPage.vue'
+import { useCartCountStore } from '../stores/cart-count'
 
 const cart = {
   cart_id: 'cart-1', version: 3, item_count: 2, coupon_code: null,
@@ -25,13 +27,58 @@ const cart = {
   currency: 'VND' as const,
 }
 
+const mountCartPage = (pinia = createPinia()) => mount(CartPage, {
+  global: {
+    plugins: [pinia],
+    stubs: { RouterLink: { template: '<a><slot /></a>' } },
+  },
+})
+
 describe('CartPage', () => {
   beforeEach(() => vi.clearAllMocks())
+
+  it('syncs the shared count when loading the cart', async () => {
+    commerce.getCart.mockResolvedValue(cart)
+    const pinia = createPinia()
+
+    mountCartPage(pinia)
+    await flushPromises()
+
+    expect(useCartCountStore(pinia).itemCount).toBe(2)
+  })
+
+  it.each([
+    'updateCartItem',
+    'removeCartItem',
+    'applyCartCoupon',
+    'removeCartCoupon',
+  ] as const)('syncs the shared count after a successful %s mutation', async (operation) => {
+    const initialCart = operation === 'removeCartCoupon' ? { ...cart, coupon_code: 'SAVE' } : cart
+    commerce.getCart.mockResolvedValue(initialCart)
+    commerce[operation].mockResolvedValue({ ...initialCart, version: 4, item_count: 7 })
+    const pinia = createPinia()
+    const wrapper = mountCartPage(pinia)
+    await flushPromises()
+
+    if (operation === 'updateCartItem') {
+      await wrapper.get('[data-testid="update-item-item-1"]').trigger('click')
+    } else if (operation === 'removeCartItem') {
+      await wrapper.findAll('button').find((button) => button.text() === 'Xóa')!.trigger('click')
+    } else if (operation === 'applyCartCoupon') {
+      await wrapper.get('#coupon').setValue('SAVE')
+      await wrapper.get('form').trigger('submit')
+    } else {
+      await wrapper.findAll('button').find((button) => button.text() === 'Gỡ mã SAVE')!.trigger('click')
+    }
+    await flushPromises()
+
+    expect(useCartCountStore(pinia).itemCount).toBe(7)
+  })
 
   it('loads cart, renders VND totals, and updates quantity with current version', async () => {
     commerce.getCart.mockResolvedValue(cart)
     commerce.updateCartItem.mockResolvedValue({ ...cart, version: 4, total: 150000 })
-    const wrapper = mount(CartPage, { global: { stubs: { RouterLink: { template: '<a><slot /></a>' } } } })
+    const wrapper = mountCartPage()
     await flushPromises()
 
     expect(wrapper.text()).toContain('Áo thun Mộc')
@@ -45,7 +92,7 @@ describe('CartPage', () => {
 
   it('blocks stock overflow before the request and explains the boundary', async () => {
     commerce.getCart.mockResolvedValue(cart)
-    const wrapper = mount(CartPage, { global: { stubs: { RouterLink: { template: '<a><slot /></a>' } } } })
+    const wrapper = mountCartPage()
     await flushPromises()
 
     await wrapper.get('[aria-label="Số lượng Áo thun Mộc"]').setValue(4)
@@ -58,7 +105,7 @@ describe('CartPage', () => {
   it('reloads fresh server state after an optimistic cart conflict', async () => {
     commerce.getCart.mockResolvedValueOnce(cart).mockResolvedValueOnce({ ...cart, version: 8 })
     commerce.updateCartItem.mockRejectedValue({ payload: { error: { code: 'CART_VERSION_CONFLICT' } } })
-    const wrapper = mount(CartPage, { global: { stubs: { RouterLink: { template: '<a><slot /></a>' } } } })
+    const wrapper = mountCartPage()
     await flushPromises()
 
     await wrapper.get('[data-testid="update-item-item-1"]').trigger('click')
