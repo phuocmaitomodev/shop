@@ -40,6 +40,17 @@ describe('application router', () => {
     expect(router.resolve('/san-pham').matched[0]?.components?.default).not.toBe(PlaceholderPage)
   })
 
+  it('uses the shared product listing page for category slugs', () => {
+    const router = createAppRouter(createMemoryHistory())
+    const resolved = router.resolve('/danh-muc/ao-thun')
+
+    expect(resolved.name).toBe('category')
+    expect(resolved.matched[0]?.components?.default).not.toBe(PlaceholderPage)
+    expect(resolved.matched[0]?.components?.default).toBe(
+      router.resolve('/san-pham').matched[0]?.components?.default,
+    )
+  })
+
   it.each(primaryRoutes)('resolves %s to a named placeholder route', (path) => {
     const router = createAppRouter(createMemoryHistory())
     const resolved = router.resolve(path)

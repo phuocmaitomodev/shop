@@ -41,7 +41,8 @@ const mountPage = async (url = '/san-pham') => {
   const router = createRouter({
     history: createMemoryHistory(),
     routes: [
-      { path: '/san-pham', component: ProductListPage },
+      { path: '/san-pham', name: 'products', component: ProductListPage },
+      { path: '/danh-muc/:slug', name: 'category', component: ProductListPage },
       { path: '/san-pham/:slug', component: { template: '<div />' } },
     ],
   })
@@ -78,6 +79,97 @@ describe('ProductListPage', () => {
     await wrapper.get('a[href="/san-pham/ao-thun-basic"]').trigger('click')
     await flushPromises()
     expect(router.currentRoute.value.fullPath).toBe('/san-pham/ao-thun-basic')
+  })
+
+  it('uses the category path slug as the authoritative category filter', async () => {
+    vi.mocked(getProducts).mockResolvedValue({
+      items: [product],
+      page: 2,
+      page_size: 12,
+      total: 30,
+    })
+
+    const { wrapper } = await mountPage(
+      '/danh-muc/ao-thun?category=quan-jeans&q=cotton&min_price=100000&max_price=500000&color=den&size=M&page=2',
+    )
+    await flushPromises()
+
+    expect(getProducts).toHaveBeenCalledWith({
+      q: 'cotton',
+      category: 'ao-thun',
+      minPrice: 100000,
+      maxPrice: 500000,
+      color: 'den',
+      size: 'M',
+      page: 2,
+      pageSize: 12,
+    })
+    expect(wrapper.text()).toContain('Danh mục: ao-thun')
+    expect(wrapper.find('input[name="category"]').exists()).toBe(false)
+  })
+
+  it('keeps the category path while applying the remaining filters', async () => {
+    vi.mocked(getProducts).mockResolvedValue({
+      items: [],
+      page: 1,
+      page_size: 12,
+      total: 30,
+    })
+
+    const { router, wrapper } = await mountPage('/danh-muc/ao-thun?page=3')
+    await flushPromises()
+    vi.mocked(getProducts).mockClear()
+
+    await wrapper.get('input[name="q"]').setValue('  cotton  ')
+    await wrapper.get('input[name="min_price"]').setValue('100000')
+    await wrapper.get('input[name="max_price"]').setValue('500000')
+    await wrapper.get('input[name="color"]').setValue('den')
+    await wrapper.get('input[name="size"]').setValue('M')
+    await wrapper.get('form[role="search"]').trigger('submit')
+    await flushPromises()
+
+    expect(router.currentRoute.value.path).toBe('/danh-muc/ao-thun')
+    expect(router.currentRoute.value.query).toEqual({
+      q: 'cotton',
+      min_price: '100000',
+      max_price: '500000',
+      color: 'den',
+      size: 'M',
+    })
+    expect(getProducts).toHaveBeenLastCalledWith({
+      q: 'cotton',
+      category: 'ao-thun',
+      minPrice: 100000,
+      maxPrice: 500000,
+      color: 'den',
+      size: 'M',
+      page: 1,
+      pageSize: 12,
+    })
+  })
+
+  it('keeps the category path and filters while changing pages', async () => {
+    vi.mocked(getProducts).mockResolvedValue({
+      items: [product],
+      page: 2,
+      page_size: 12,
+      total: 30,
+    })
+
+    const { router, wrapper } = await mountPage('/danh-muc/ao-thun?q=cotton&page=2')
+    await flushPromises()
+
+    await wrapper.get('button[aria-label="Trang sau"]').trigger('click')
+    await flushPromises()
+
+    expect(router.currentRoute.value.path).toBe('/danh-muc/ao-thun')
+    expect(router.currentRoute.value.query).toEqual({ q: 'cotton', page: '3' })
+    expect(getProducts).toHaveBeenLastCalledWith({
+      q: 'cotton',
+      category: 'ao-thun',
+      page: 3,
+      pageSize: 12,
+    })
   })
 
   it('applies supported search and filters in the URL and resets pagination', async () => {
@@ -227,6 +319,25 @@ describe('ProductListPage', () => {
     expect(getProducts).toHaveBeenLastCalledWith({ q: 'ao', page: 3, pageSize: 12 })
     expect(wrapper.text()).toContain('Áo thun basic')
     expect(wrapper.get('nav[aria-label="Phân trang sản phẩm"]').text()).toContain('Trang 3 / 3')
+  })
+
+  it('keeps the category path when redirecting an excessive page', async () => {
+    vi.mocked(getProducts)
+      .mockResolvedValueOnce({ items: [], page: 99, page_size: 12, total: 25 })
+      .mockResolvedValueOnce({ items: [product], page: 3, page_size: 12, total: 25 })
+
+    const { router, wrapper } = await mountPage('/danh-muc/ao-thun?q=cotton&page=99')
+    await flushPromises()
+
+    expect(router.currentRoute.value.path).toBe('/danh-muc/ao-thun')
+    expect(router.currentRoute.value.query).toEqual({ q: 'cotton', page: '3' })
+    expect(getProducts).toHaveBeenLastCalledWith({
+      q: 'cotton',
+      category: 'ao-thun',
+      page: 3,
+      pageSize: 12,
+    })
+    expect(wrapper.text()).toContain('Áo thun basic')
   })
 
   it('normalizes numeric page aliases before loading', async () => {

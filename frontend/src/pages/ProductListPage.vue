@@ -57,8 +57,14 @@ const parseRoutePage = (value: unknown) => {
 }
 
 const page = computed(() => parseRoutePage(route.query.page))
+const categorySlug = computed(() => (
+  route.name === 'category' && typeof route.params.slug === 'string'
+    ? route.params.slug.trim()
+    : ''
+))
 const canonicalPageValue = () => page.value > 1 ? String(page.value) : undefined
 const hasCanonicalPage = () => route.query.page === canonicalPageValue()
+const hasCanonicalCategory = () => !categorySlug.value || route.query.category === undefined
 const priceQuery = computed(() => ({
   min: normalizePrice(route.query.min_price),
   max: normalizePrice(route.query.max_price),
@@ -67,7 +73,7 @@ const priceQuery = computed(() => ({
 const catalogQuery = computed<CatalogQuery>(() => {
   const query: CatalogQuery = { page: page.value, pageSize: PAGE_SIZE }
   const q = queryValue(route.query.q).trim()
-  const category = queryValue(route.query.category).trim()
+  const category = categorySlug.value || queryValue(route.query.category).trim()
   const color = queryValue(route.query.color).trim()
   const size = queryValue(route.query.size).trim()
   const minPrice = priceQuery.value.min.value
@@ -97,7 +103,7 @@ const hasCanonicalPrices = () => (
 const syncFilters = () => {
   priceFilterError.value = ''
   filters.q = queryValue(route.query.q)
-  filters.category = queryValue(route.query.category)
+  filters.category = categorySlug.value || queryValue(route.query.category)
   filters.minPrice = queryValue(route.query.min_price)
   filters.maxPrice = queryValue(route.query.max_price)
   filters.color = queryValue(route.query.color)
@@ -109,7 +115,6 @@ const applyFilters = async () => {
   const query: Record<string, string> = {}
   const values = {
     q: formValue(filters.q),
-    category: formValue(filters.category),
     min_price: formValue(filters.minPrice),
     max_price: formValue(filters.maxPrice),
     color: formValue(filters.color),
@@ -140,7 +145,11 @@ const applyFilters = async () => {
   for (const [key, value] of Object.entries(values)) {
     if (value) query[key] = value
   }
-  const destination = router.resolve({ path: '/san-pham', query })
+  if (!categorySlug.value) {
+    const category = formValue(filters.category)
+    if (category) query.category = category
+  }
+  const destination = router.resolve({ path: route.path, query })
   if (destination.fullPath === route.fullPath) {
     await loadProducts()
     return
@@ -150,7 +159,7 @@ const applyFilters = async () => {
 
 const changePage = async (nextPage: number) => {
   await router.push({
-    path: '/san-pham',
+    path: route.path,
     query: {
       ...route.query,
       page: nextPage > 1 ? String(nextPage) : undefined,
@@ -170,7 +179,7 @@ const loadProducts = async () => {
     const totalPages = Math.max(1, Math.ceil(result.total / PAGE_SIZE))
     if (page.value > totalPages) {
       await router.replace({
-        path: '/san-pham',
+        path: route.path,
         query: {
           ...route.query,
           page: totalPages > 1 ? String(totalPages) : undefined,
@@ -197,8 +206,15 @@ watch(
     syncFilters()
     if (!hasCanonicalPage()) {
       void router.replace({
-        path: '/san-pham',
+        path: route.path,
         query: { ...route.query, page: canonicalPageValue() },
+      })
+      return
+    }
+    if (!hasCanonicalCategory()) {
+      void router.replace({
+        path: route.path,
+        query: { ...route.query, category: undefined },
       })
       return
     }
@@ -209,7 +225,7 @@ watch(
     }
     if (!hasCanonicalPrices()) {
       void router.replace({
-        path: '/san-pham',
+        path: route.path,
         query: {
           ...route.query,
           min_price: priceQuery.value.min.canonical,
@@ -231,14 +247,14 @@ watch(
 
 <template>
   <section class="catalog-page">
-    <p class="eyebrow">Catalog</p>
-    <h1>Sản phẩm</h1>
+    <p class="eyebrow">Sản phẩm</p>
+    <h1>{{ categorySlug ? `Danh mục: ${categorySlug}` : 'Tất cả sản phẩm' }}</h1>
     <form class="catalog-page__filters" role="search" @submit.prevent="applyFilters">
       <label>
         Tìm kiếm
         <input v-model="filters.q" name="q" type="search" placeholder="Tên hoặc từ khóa" />
       </label>
-      <label>
+      <label v-if="!categorySlug">
         Danh mục
         <input v-model="filters.category" name="category" placeholder="Ví dụ: ao-thun" />
       </label>
