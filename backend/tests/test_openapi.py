@@ -32,6 +32,34 @@ def test_openapi_contains_be04_auth_and_admin_guard_endpoints(
     assert paths["/api/v1/admin/auth-check"]["get"]["security"]
 
 
+def test_openapi_contains_customer_profile_contract(client: TestClient) -> None:
+    schema = client.get("/openapi.json").json()
+    profile = schema["paths"]["/api/v1/account/profile"]
+
+    assert {"get", "patch"} <= set(profile)
+    for method in ("get", "patch"):
+        operation = profile[method]
+        assert operation["security"]
+        assert operation["responses"]["200"]["content"]["application/json"][
+            "schema"
+        ]["$ref"] == "#/components/schemas/UserEnvelope"
+        for error_status in ("401", "403"):
+            assert operation["responses"][error_status]["content"][
+                "application/json"
+            ]["schema"]["$ref"] == "#/components/schemas/ErrorEnvelope"
+
+    patch = profile["patch"]
+    assert patch["responses"]["422"]["content"]["application/json"]["schema"][
+        "$ref"
+    ] == "#/components/schemas/ErrorEnvelope"
+    request_ref = patch["requestBody"]["content"]["application/json"]["schema"][
+        "$ref"
+    ]
+    request_schema = schema["components"]["schemas"][request_ref.rsplit("/", 1)[-1]]
+    assert set(request_schema["properties"]) == {"full_name", "phone"}
+    assert request_schema["additionalProperties"] is False
+
+
 def test_openapi_contains_be05_public_catalog_endpoints(client: TestClient) -> None:
     schema = client.get("/openapi.json").json()
     paths = schema["paths"]

@@ -56,3 +56,13 @@ async def require_admin(user: User = Depends(get_current_user)) -> User:
             message="Bạn không có quyền truy cập chức năng quản trị.",
         )
     return user
+
+
+async def require_customer(user: User = Depends(get_current_user)) -> User:
+    if user.role != "customer":
+        raise AppError(
+            status_code=status.HTTP_403_FORBIDDEN,
+            code="CUSTOMER_REQUIRED",
+            message="Chức năng này chỉ dành cho khách hàng.",
+        )
+    return user

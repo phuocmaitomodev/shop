@@ -1,7 +1,14 @@
 from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    EmailStr,
+    Field,
+    field_validator,
+    model_validator,
+)
 
 
 class RegisterRequest(BaseModel):
@@ -59,6 +66,34 @@ class UserResponse(BaseModel):
 class UserEnvelope(BaseModel):
     data: UserResponse
     meta: dict[str, str]
+
+
+class ProfileUpdateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    full_name: str | None = Field(default=None, min_length=1, max_length=200)
+    phone: str | None = Field(default=None, max_length=32)
+
+    @field_validator("full_name", mode="before")
+    @classmethod
+    def normalize_full_name(cls, value: object) -> object:
+        if value is None:
+            raise ValueError("Full name cannot be null")
+        return value.strip() if isinstance(value, str) else value
+
+    @field_validator("phone", mode="before")
+    @classmethod
+    def normalize_phone(cls, value: object) -> object:
+        if isinstance(value, str):
+            normalized = value.strip()
+            return normalized or None
+        return value
+
+    @model_validator(mode="after")
+    def require_editable_field(self) -> "ProfileUpdateRequest":
+        if not self.model_fields_set:
+            raise ValueError("At least one editable field is required")
+        return self
 
 
 class StatusData(BaseModel):
