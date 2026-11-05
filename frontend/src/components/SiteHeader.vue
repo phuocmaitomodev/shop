@@ -50,7 +50,7 @@ onMounted(cartCountStore.loadCartCount)
 
       <div class="header-actions" aria-label="Tiện ích">
         <RouterLink to="/tai-khoan">Tài khoản</RouterLink>
-        <RouterLink class="cart-link" to="/gio-hang">Giỏ hàng <span aria-hidden="true">({{ itemCount }})</span></RouterLink>
+        <RouterLink class="cart-link" to="/gio-hang">Giỏ hàng <span>({{ itemCount }})</span></RouterLink>
       </div>
     </div>
 

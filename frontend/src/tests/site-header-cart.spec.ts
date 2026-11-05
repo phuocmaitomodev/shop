@@ -30,6 +30,15 @@ const mountHeader = (pinia = createPinia()) => mount(SiteHeader, {
   },
 })
 
+const accessibleName = (element: Element) => {
+  const ariaLabel = element.getAttribute('aria-label')
+  if (ariaLabel) return ariaLabel.trim()
+
+  const clone = element.cloneNode(true) as HTMLElement
+  clone.querySelectorAll('[aria-hidden="true"]').forEach((node) => node.remove())
+  return clone.textContent?.replace(/\s+/g, ' ').trim() ?? ''
+}
+
 describe('SiteHeader cart count', () => {
   beforeEach(() => vi.clearAllMocks())
 
@@ -59,6 +68,18 @@ describe('SiteHeader cart count', () => {
     expect(wrapper.findAll('a[href="/gio-hang"]').map((link) => link.text())).toEqual([
       'Giỏ hàng (5)',
       'Giỏ hàng (5)',
+    ])
+  })
+
+  it('exposes the live count in the accessible name of both cart links', async () => {
+    commerce.getCart.mockResolvedValue(cart)
+
+    const wrapper = mountHeader()
+    await flushPromises()
+
+    expect(wrapper.findAll('a[href="/gio-hang"]').map((link) => accessibleName(link.element))).toEqual([
+      'Giỏ hàng (3)',
+      'Giỏ hàng (3)',
     ])
   })
 })
