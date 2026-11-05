@@ -1,7 +1,9 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 
-import type { ProductCardData, ProductColor } from '../../types/catalog'
+import { getProduct } from '../../services/catalog'
+import { addCartItem } from '../../services/commerce'
+import type { ProductCardData, ProductColor, ProductVariant } from '../../types/catalog'
 import ProductImage from './ProductImage.vue'
 import ProductPrice from './ProductPrice.vue'
 import ProductStockStatus from './ProductStockStatus.vue'
@@ -11,11 +13,57 @@ const props = defineProps<{
 }>()
 
 const detailUrl = computed(() => `/san-pham/${encodeURIComponent(props.product.slug)}`)
+const pickerOpen = ref(false)
+const loadingVariants = ref(false)
+const adding = ref(false)
+const availableVariants = ref<ProductVariant[]>([])
+const selectedVariantId = ref('')
+const quickAddMessage = ref('')
+const quickAddError = ref('')
 const colorStyle = (color: ProductColor) => (
   color.hex_code && /^#[0-9a-f]{6}$/i.test(color.hex_code)
     ? { backgroundColor: color.hex_code }
     : undefined
 )
+
+const openQuickAdd = async () => {
+  quickAddMessage.value = ''
+  quickAddError.value = ''
+  loadingVariants.value = true
+  try {
+    const detail = await getProduct(props.product.slug)
+    availableVariants.value = detail.variants.filter((variant) => (
+      variant.is_available && variant.stock_quantity > 0
+    ))
+    pickerOpen.value = true
+    selectedVariantId.value = availableVariants.value.length === 1
+      ? availableVariants.value[0]?.id ?? ''
+      : ''
+    if (!availableVariants.value.length) quickAddError.value = 'Sản phẩm vừa hết hàng.'
+  } catch {
+    quickAddError.value = 'Không thể tải phân loại sản phẩm. Vui lòng thử lại.'
+  } finally {
+    loadingVariants.value = false
+  }
+}
+
+const confirmQuickAdd = async () => {
+  if (!selectedVariantId.value) {
+    quickAddError.value = 'Vui lòng chọn màu và size.'
+    return
+  }
+  quickAddMessage.value = ''
+  quickAddError.value = ''
+  adding.value = true
+  try {
+    await addCartItem({ variant_id: selectedVariantId.value, quantity: 1 })
+    quickAddMessage.value = 'Đã thêm vào giỏ hàng.'
+  } catch {
+    quickAddError.value = 'Không thể thêm vào giỏ. Tồn kho có thể vừa thay đổi.'
+  } finally {
+    adding.value = false
+  }
+}
 </script>
 
 <template>
@@ -65,6 +113,48 @@ const colorStyle = (color: ProductColor) => (
         <span class="product-card__cta">Xem chi tiết <span aria-hidden="true">→</span></span>
       </div>
     </RouterLink>
+    <div class="product-card__quick-add">
+      <button
+        v-if="!pickerOpen"
+        data-testid="quick-add-open"
+        type="button"
+        :disabled="!product.in_stock || loadingVariants"
+        @click="openQuickAdd"
+      >
+        {{ loadingVariants ? 'Đang tải…' : 'Thêm vào giỏ' }}
+      </button>
+      <template v-else>
+        <label :for="`quick-add-variant-${product.id}`">Màu / Size</label>
+        <select
+          :id="`quick-add-variant-${product.id}`"
+          v-model="selectedVariantId"
+          :aria-label="`Chọn phân loại cho ${product.name}`"
+          :disabled="adding || !availableVariants.length"
+        >
+          <option disabled value="">Chọn phân loại</option>
+          <option v-for="variant in availableVariants" :key="variant.id" :value="variant.id">
+            {{ variant.color.name }} / {{ variant.size.code }} · Còn {{ variant.stock_quantity }}
+          </option>
+        </select>
+        <button
+          data-testid="quick-add-confirm"
+          type="button"
+          :disabled="adding || !selectedVariantId"
+          @click="confirmQuickAdd"
+        >
+          {{ adding ? 'Đang thêm…' : 'Xác nhận thêm' }}
+        </button>
+      </template>
+      <p v-if="quickAddError" class="product-card__quick-add-message" role="alert">{{ quickAddError }}</p>
+      <p
+        v-if="quickAddMessage"
+        class="product-card__quick-add-message"
+        role="status"
+        data-testid="quick-add-message"
+      >
+        {{ quickAddMessage }}
+      </p>
+    </div>
   </article>
 </template>
 
@@ -177,5 +267,50 @@ const colorStyle = (color: ProductColor) => (
   margin-top: var(--space-2);
   color: var(--color-accent-strong);
   font-weight: var(--font-weight-bold);
+}
+
+.product-card__quick-add {
+  display: grid;
+  gap: var(--space-2);
+  padding: 0 var(--space-4) var(--space-4);
+}
+
+.product-card__quick-add label {
+  color: var(--color-ink-muted);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-bold);
+}
+
+.product-card__quick-add select,
+.product-card__quick-add button {
+  width: 100%;
+  min-height: 2.75rem;
+  border-radius: var(--radius-pill);
+}
+
+.product-card__quick-add select {
+  padding-inline: var(--space-3);
+  border: 1px solid var(--color-border);
+  background: var(--color-surface);
+  color: var(--color-ink);
+}
+
+.product-card__quick-add button {
+  border: 0;
+  background: var(--color-accent);
+  color: white;
+  font-weight: var(--font-weight-bold);
+  cursor: pointer;
+}
+
+.product-card__quick-add button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.product-card__quick-add-message {
+  margin: 0;
+  color: var(--color-ink-muted);
+  font-size: var(--font-size-sm);
 }
 </style>
