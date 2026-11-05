@@ -108,6 +108,25 @@ describe('ProductListPage', () => {
     expect(wrapper.find('input[name="category"]').exists()).toBe(false)
   })
 
+  it('fails closed when the category path slug is blank', async () => {
+    vi.mocked(getProducts).mockResolvedValue({
+      items: [product],
+      page: 1,
+      page_size: 12,
+      total: 1,
+    })
+
+    const { router, wrapper } = await mountPage('/danh-muc/%20?category=ao-thun')
+    await flushPromises()
+
+    expect(router.currentRoute.value.query).toEqual({})
+    expect(getProducts).not.toHaveBeenCalled()
+    expect(wrapper.get('[data-testid="catalog-empty"]').text()).toContain(
+      'Không tìm thấy sản phẩm phù hợp.',
+    )
+    expect(wrapper.find('input[name="category"]').exists()).toBe(false)
+  })
+
   it('keeps the category path while applying the remaining filters', async () => {
     vi.mocked(getProducts).mockResolvedValue({
       items: [],

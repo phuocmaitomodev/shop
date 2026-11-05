@@ -57,14 +57,15 @@ const parseRoutePage = (value: unknown) => {
 }
 
 const page = computed(() => parseRoutePage(route.query.page))
+const isCategoryRoute = computed(() => route.name === 'category')
 const categorySlug = computed(() => (
-  route.name === 'category' && typeof route.params.slug === 'string'
+  isCategoryRoute.value && typeof route.params.slug === 'string'
     ? route.params.slug.trim()
     : ''
 ))
 const canonicalPageValue = () => page.value > 1 ? String(page.value) : undefined
 const hasCanonicalPage = () => route.query.page === canonicalPageValue()
-const hasCanonicalCategory = () => !categorySlug.value || route.query.category === undefined
+const hasCanonicalCategory = () => !isCategoryRoute.value || route.query.category === undefined
 const priceQuery = computed(() => ({
   min: normalizePrice(route.query.min_price),
   max: normalizePrice(route.query.max_price),
@@ -73,7 +74,9 @@ const priceQuery = computed(() => ({
 const catalogQuery = computed<CatalogQuery>(() => {
   const query: CatalogQuery = { page: page.value, pageSize: PAGE_SIZE }
   const q = queryValue(route.query.q).trim()
-  const category = categorySlug.value || queryValue(route.query.category).trim()
+  const category = isCategoryRoute.value
+    ? categorySlug.value
+    : queryValue(route.query.category).trim()
   const color = queryValue(route.query.color).trim()
   const size = queryValue(route.query.size).trim()
   const minPrice = priceQuery.value.min.value
@@ -103,7 +106,7 @@ const hasCanonicalPrices = () => (
 const syncFilters = () => {
   priceFilterError.value = ''
   filters.q = queryValue(route.query.q)
-  filters.category = categorySlug.value || queryValue(route.query.category)
+  filters.category = isCategoryRoute.value ? categorySlug.value : queryValue(route.query.category)
   filters.minPrice = queryValue(route.query.min_price)
   filters.maxPrice = queryValue(route.query.max_price)
   filters.color = queryValue(route.query.color)
@@ -145,7 +148,7 @@ const applyFilters = async () => {
   for (const [key, value] of Object.entries(values)) {
     if (value) query[key] = value
   }
-  if (!categorySlug.value) {
+  if (!isCategoryRoute.value) {
     const category = formValue(filters.category)
     if (category) query.category = category
   }
@@ -218,6 +221,10 @@ watch(
       })
       return
     }
+    if (isCategoryRoute.value && !categorySlug.value) {
+      status.value = 'success'
+      return
+    }
     if (!hasValidPriceValues()) {
       status.value = 'invalid'
       priceFilterError.value = PRICE_VALUE_ERROR
@@ -254,7 +261,7 @@ watch(
         Tìm kiếm
         <input v-model="filters.q" name="q" type="search" placeholder="Tên hoặc từ khóa" />
       </label>
-      <label v-if="!categorySlug">
+      <label v-if="!isCategoryRoute">
         Danh mục
         <input v-model="filters.category" name="category" placeholder="Ví dụ: ao-thun" />
       </label>
