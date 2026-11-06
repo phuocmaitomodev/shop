@@ -8,6 +8,7 @@ import ProductStockStatus from '../components/catalog/ProductStockStatus.vue'
 import ProductVariantSelector from '../components/catalog/ProductVariantSelector.vue'
 import { getProduct } from '../services/catalog'
 import { addCartItem } from '../services/commerce'
+import { useCartCountStore } from '../stores/cart-count'
 import type { ProductDetail, ProductImage as ProductImageData, ProductVariant } from '../types/catalog'
 
 const route = useRoute()
@@ -59,7 +60,8 @@ const addToCart = async () => {
   if (quantity.value > selectedVariant.value.stock_quantity) { cartError.value = `Biến thể này chỉ còn ${selectedVariant.value.stock_quantity} sản phẩm.`; return }
   adding.value = true
   try {
-    await addCartItem({ variant_id: selectedVariant.value.id, quantity: quantity.value })
+    const cart = await addCartItem({ variant_id: selectedVariant.value.id, quantity: quantity.value })
+    useCartCountStore().syncCart(cart)
     cartMessage.value = 'Đã thêm vào giỏ hàng.'
   } catch { cartError.value = 'Không thể thêm vào giỏ. Tồn kho có thể vừa thay đổi; vui lòng thử lại.' } finally { adding.value = false }
 }

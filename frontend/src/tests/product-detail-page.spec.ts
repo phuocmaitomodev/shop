@@ -1,10 +1,12 @@
 import { flushPromises, mount } from '@vue/test-utils'
+import { createPinia } from 'pinia'
 import { createMemoryHistory, createRouter } from 'vue-router'
 import { describe, expect, it, vi } from 'vitest'
 
 import ProductDetailPage from '../pages/ProductDetailPage.vue'
 import { getProduct } from '../services/catalog'
 import { addCartItem } from '../services/commerce'
+import { useCartCountStore } from '../stores/cart-count'
 import type { ProductDetail } from '../types/catalog'
 
 vi.mock('../services/catalog', () => ({
@@ -69,7 +71,7 @@ const product: ProductDetail = {
   }],
 }
 
-const mountPage = async (slug = 'ao-thun-basic') => {
+const mountPage = async (slug = 'ao-thun-basic', pinia = createPinia()) => {
   const router = createRouter({
     history: createMemoryHistory(),
     routes: [{ path: '/san-pham/:slug?', component: ProductDetailPage }],
@@ -78,7 +80,7 @@ const mountPage = async (slug = 'ao-thun-basic') => {
   await router.isReady()
 
   return mount(ProductDetailPage, {
-    global: { plugins: [router] },
+    global: { plugins: [pinia, router] },
   })
 }
 
@@ -138,6 +140,23 @@ describe('ProductDetailPage', () => {
 
     expect(addCartItemMock).toHaveBeenCalledWith({ variant_id: 'variant-black-m', quantity: 3 })
     expect(wrapper.get('[data-testid="cart-message"]').text()).toContain('Đã thêm vào giỏ hàng')
+  })
+
+  it('syncs the shared count from the successful add response', async () => {
+    getProductMock.mockResolvedValue(product)
+    addCartItemMock.mockResolvedValue({
+      cart_id: 'cart-1', version: 2, items: [], item_count: 5, coupon_code: null,
+      subtotal: 0, discount_amount: 0, shipping_fee: 0, total: 0, currency: 'VND',
+    })
+    const pinia = createPinia()
+    const wrapper = await mountPage('ao-thun-basic', pinia)
+    await flushPromises()
+
+    await wrapper.get('[aria-label="Số lượng thêm vào giỏ"]').setValue(2)
+    await wrapper.get('[data-testid="add-to-cart"]').trigger('click')
+    await flushPromises()
+
+    expect(useCartCountStore(pinia).itemCount).toBe(5)
   })
 
   it('shows a recoverable error and retries the request', async () => {
