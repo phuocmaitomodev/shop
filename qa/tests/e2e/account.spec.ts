@@ -11,23 +11,29 @@ type ExpectedHttpFailure = {
   status: number
 }
 
+type ExpectedConsoleFailure = Pick<ExpectedHttpFailure, 'pathname' | 'status'>
+
+test.use({ trace: 'off' })
+
 const installRuntimeGuard = (page: Page, expectedHttpFailures: ExpectedHttpFailure[]) => {
   const errors: string[] = []
-  const expectedConsoleStatuses: number[] = []
+  const expectedConsoleFailures: ExpectedConsoleFailure[] = []
 
   page.on('pageerror', (error) => errors.push(`pageerror: ${error.message}`))
   page.on('console', (message) => {
     if (message.type() !== 'error') return
 
-    const failedStatus = /status of (\d+) \(/.exec(message.text())?.[1]
-    const expectedIndex = failedStatus
-      ? expectedConsoleStatuses.indexOf(Number(failedStatus))
-      : -1
+    const failedStatus = Number(/status of (\d+) \(/.exec(message.text())?.[1])
+    const location = message.location().url
+    const pathname = location ? new URL(location).pathname : ''
+    const expectedIndex = expectedConsoleFailures.findIndex((failure) => (
+      failure.status === failedStatus && failure.pathname === pathname
+    ))
     if (expectedIndex >= 0) {
-      expectedConsoleStatuses.splice(expectedIndex, 1)
+      expectedConsoleFailures.splice(expectedIndex, 1)
       return
     }
-    errors.push(`console: ${message.text()}`)
+    errors.push(`console: ${message.text()} at ${location || '<unknown>'}`)
   })
   page.on('requestfailed', (request) => {
     errors.push(`requestfailed: ${request.method()} ${request.url()} (${request.failure()?.errorText})`)
@@ -44,7 +50,7 @@ const installRuntimeGuard = (page: Page, expectedHttpFailures: ExpectedHttpFailu
     ))
     if (expectedIndex >= 0) {
       expectedHttpFailures.splice(expectedIndex, 1)
-      expectedConsoleStatuses.push(response.status())
+      expectedConsoleFailures.push({ pathname, status: response.status() })
       return
     }
     errors.push(`http: ${request.method()} ${response.url()} (${response.status()})`)
@@ -53,9 +59,40 @@ const installRuntimeGuard = (page: Page, expectedHttpFailures: ExpectedHttpFailu
   return () => {
     expect(errors, 'Trang tài khoản không được phát sinh lỗi runtime hoặc HTTP ngoài dự kiến').toEqual([])
     expect(expectedHttpFailures, 'Mọi lỗi HTTP dự kiến phải thực sự xảy ra').toEqual([])
-    expect(expectedConsoleStatuses, 'Console error phải khớp đúng lỗi HTTP đã cho phép').toEqual([])
+    expect(expectedConsoleFailures, 'Console error phải khớp đúng endpoint/status HTTP đã cho phép').toEqual([])
   }
 }
+
+test('runtime guard không được dùng 401 dự kiến để che console 401 từ endpoint khác', () => {
+  const listeners = new Map<string, Array<(value: unknown) => void>>()
+  const fakePage = {
+    on: (event: string, listener: (value: unknown) => void) => {
+      listeners.set(event, [...(listeners.get(event) ?? []), listener])
+    },
+  } as unknown as Page
+  const emit = (event: string, value: unknown) => {
+    for (const listener of listeners.get(event) ?? []) listener(value)
+  }
+  const expectedHttpFailures: ExpectedHttpFailure[] = [{
+    method: 'POST',
+    pathname: '/api/v1/auth/login',
+    status: 401,
+  }]
+  const assertRuntimeClean = installRuntimeGuard(fakePage, expectedHttpFailures)
+
+  emit('response', {
+    status: () => 401,
+    url: () => 'http://localhost:8000/api/v1/auth/login',
+    request: () => ({ method: () => 'POST' }),
+  })
+  emit('console', {
+    type: () => 'error',
+    text: () => 'Failed to load resource: the server responded with a status of 401 (Unauthorized)',
+    location: () => ({ url: 'http://localhost:8000/api/v1/unrelated' }),
+  })
+
+  expect(assertRuntimeClean).toThrow(/unrelated/)
+})
 
 const storageSnapshot = async (page: Page) => page.evaluate(async () => ({
   local: Object.entries(localStorage),
@@ -114,6 +151,7 @@ test('@account đăng nhập cookie, cập nhật bền vững và đăng xuất
 
   await page.goto('/dang-nhap')
   await page.getByLabel('Email').fill(email.toUpperCase())
+  await expect(page.getByLabel('Mật khẩu')).toHaveAttribute('type', 'password')
   await page.getByLabel('Mật khẩu').fill('MatKhau-Sai-123')
   const failedLogin = page.waitForResponse((response) => (
     response.url() === `${apiBaseURL}/auth/login`
