@@ -69,6 +69,7 @@ QA_BASE_URL=http://127.0.0.1:15176 \
 QA_API_BASE_URL=http://127.0.0.1:18002/api/v1 \
 QA_ACCOUNT_COOKIE_NAME=shop_account_e2e_session \
 npm --prefix qa exec playwright test -- --list --grep @account \
+  --config qa/playwright.config.ts \
   --project=chromium-desktop --project=chromium-mobile
 
 QA_BASE_URL=http://127.0.0.1:15176 \
@@ -76,6 +77,7 @@ QA_API_BASE_URL=http://127.0.0.1:18002/api/v1 \
 QA_ACCOUNT_COOKIE_NAME=shop_account_e2e_session \
 QA_ACCOUNT_RUN_ID="manual-$(date +%s)" \
 npm --prefix qa exec playwright test -- --grep @account \
+  --config qa/playwright.config.ts \
   --project=chromium-desktop --project=chromium-mobile --workers=1
 ```
 
