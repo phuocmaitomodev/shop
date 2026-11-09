@@ -73,4 +73,16 @@ describe('application router', () => {
     expect(resolved.name).toBe('product-detail')
     expect(typeof resolved.matched[0]?.components?.default).toBe('function')
   })
+
+  it.each([
+    ['/dang-nhap', 'login'],
+    ['/tai-khoan', 'account'],
+  ])('lazy loads the real account flow page for %s', (path, name) => {
+    const router = createAppRouter(createMemoryHistory())
+    const resolved = router.resolve(path)
+
+    expect(resolved.name).toBe(name)
+    expect(resolved.matched[0]?.components?.default).not.toBe(PlaceholderPage)
+    expect(typeof resolved.matched[0]?.components?.default).toBe('function')
+  })
 })
