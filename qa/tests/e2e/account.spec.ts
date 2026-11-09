@@ -1,9 +1,12 @@
 import { randomUUID } from 'node:crypto'
 import { expect, test, type Page } from '@playwright/test'
 
-const apiBaseURL = (process.env.QA_API_BASE_URL ?? 'http://localhost:8000/api/v1').replace(/\/$/, '')
+const apiBaseURL = (process.env.QA_API_BASE_URL ?? 'http://127.0.0.1:8000/api/v1').replace(/\/$/, '')
 const accountPassword = process.env.QA_ACCOUNT_PASSWORD ?? 'MatKhau-AnToan-123'
 const accountCookieName = process.env.QA_ACCOUNT_COOKIE_NAME ?? 'shop_session'
+const accountRunId = (process.env.QA_ACCOUNT_RUN_ID ?? `${Date.now().toString(36)}-${process.pid}`)
+  .toLowerCase()
+  .replace(/[^a-z0-9-]/g, '-')
 
 type ExpectedHttpFailure = {
   method: string
@@ -126,8 +129,8 @@ test('@account khách chưa đăng nhập thấy CTA và API hồ sơ từ chố
 })
 
 test('@account đăng nhập cookie, cập nhật bền vững và đăng xuất an toàn', async ({ page, request, context }, testInfo) => {
-  const fixtureId = `${testInfo.project.name}-${randomUUID().slice(0, 8)}`
-  const email = `account-${fixtureId}@example.com`
+  const fixtureId = `${accountRunId}-${testInfo.project.name}-${randomUUID().slice(0, 8)}`
+  const email = `account-${fixtureId}@qa.tomodev.vn`
   const initialName = 'Khách Hàng E2E'
   const initialPhone = '0900000000'
   const updatedName = 'Nguyễn Văn QA'
@@ -141,7 +144,10 @@ test('@account đăng nhập cookie, cập nhật bền vững và đăng xuất
       phone: initialPhone,
     },
   })
-  expect(registerResponse.status()).toBe(201)
+  if (registerResponse.status() !== 201) {
+    const safeRegisterError = (await registerResponse.text()).replaceAll(accountPassword, '[REDACTED]')
+    expect(registerResponse.status(), safeRegisterError).toBe(201)
+  }
 
   const expectedHttpFailures: ExpectedHttpFailure[] = [
     { method: 'POST', pathname: '/api/v1/auth/login', status: 401 },
