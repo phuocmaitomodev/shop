@@ -4,6 +4,19 @@
 
 Chatbot trả lời tiếng Việt về sản phẩm, size, giao hàng, đổi trả, khuyến mãi và FAQ; đề xuất product card có link; nhớ ngữ cảnh trong một session; không bịa giá, tồn kho, chính sách hoặc sản phẩm. PostgreSQL là nguồn sự thật, pgvector hỗ trợ hiểu ngôn ngữ tự nhiên, Gemini chỉ tổng hợp từ context được cấp.
 
+Pipeline release hiện hành theo yêu cầu LAI ngày 2026-11-10 là:
+
+```text
+bounded input + filter/guard
+  -> closed intent + operation-class router
+  -> grounded RAG (product/knowledge) OR owner-first controlled SQL read
+  -> typed proposal -> explicit one-time confirmation -> shared commerce use-case
+```
+
+Không stage nào được bỏ qua. Read path và mutation path tách structurally; model chỉ
+đề xuất structured intent/filter trong enum, không sinh tên tool, SQL, endpoint,
+resource ID, amount, total hoặc status.
+
 ## 2. Phân loại nguồn dữ liệu
 
 ### Dữ liệu có cấu trúc — luôn truy vấn SQL
@@ -44,6 +57,9 @@ Job idempotent theo `(source_type, source_id, source_version)`. Xóa/disable sou
 - Giới hạn độ dài, loại control characters, rate limit theo session/IP ở mức hợp lý.
 - Lưu message user; không xem text người dùng là system instruction.
 - Lấy một cửa sổ hội thoại gần nhất và state tóm tắt có cấu trúc (intent/filters/product refs), không nhồi toàn bộ transcript không giới hạn.
+- Phát hiện injection trước provider/retrieval/tool. Injection hoặc ngoài shop trả
+  `out_of_scope`; ambiguous in-scope trả `insufficient_data` và hỏi làm rõ. Cả hai
+  phải có zero retrieval/tool/mutation call.
 
 ### Bước B — phân loại ý định và trích filter
 
@@ -54,6 +70,11 @@ Bộ phân loại trả schema allow-list, ví dụ:
 - `knowledge_question`: source types phù hợp.
 - `support_handoff`.
 - `out_of_scope`.
+
+Schema production dùng toàn bộ intent ở contract commerce và thêm operation class đóng
+`rag_read | sql_read | mutation_proposal | greeting | reject`. Output unknown, field
+thừa, intent/operation không tương thích hoặc deterministic guard và provider bất đồng
+đều fail closed. Server map intent sang operation; model không truyền operation name.
 
 Giá trị filter được validate bằng code; không ghép SQL từ text. Nếu entity mơ hồ, chatbot hỏi lại hoặc tìm candidate, không tự chọn bừa.
 
@@ -69,6 +90,12 @@ effect. Unknown field/action bị schema validator reject.
 - Knowledge intent: vector top-k với filter `source_type`, `active`, locale; có thể kết hợp keyword PostgreSQL FTS.
 - Query hỗn hợp: chạy SQL và vector song song, hợp nhất theo entity/source ID. Có thể dùng Reciprocal Rank Fusion hoặc trọng số đã test; không cộng trực tiếp score khác thang đo.
 - Áp similarity threshold và giới hạn top-k/context token. Không có candidate qua ngưỡng thì `insufficient_data`.
+
+Controlled read không đi qua vector/generation: `cart_read`, `order_read`,
+`payment_demo_read`, `refund_demo_read` dùng typed repository do server chọn. Owner
+được derive trước query: authenticated session có precedence; guest cart chỉ từ cookie;
+guest order/payment/refund cần exact order code + lookup header. Production dependency
+không được là `None`/no-op/test double; wiring thiếu là release FAIL, dù unit mock pass.
 
 ### Bước D — SQL hydration
 
@@ -89,6 +116,12 @@ LLM trả structured output gồm `answer`, `cited_source_ids`, `referenced_prod
 ### Bước F — persistence và response
 
 Lưu assistant message, retrieval trace tối thiểu (IDs/scores/version, không secret), status và latency. Trả answer + product cards + nguồn. Không tiết lộ prompt nội bộ, embedding hoặc raw admin-only content.
+
+`RAG-06/07` yêu cầu context cùng session và anonymous isolation thật. `history` do client
+gửi chỉ là input untrusted, không phải session ownership hoặc transcript authority.
+Server lưu/derive session state với authenticated owner hoặc anonymous token hash; session
+UUID đơn lẻ không cho phép đọc message. Compatibility `POST /chat` không lưu transcript
+không thể tự nó chứng minh hai gate này.
 
 ## 5. Guardrails bắt buộc
 
@@ -118,6 +151,12 @@ Lưu assistant message, retrieval trace tối thiểu (IDs/scores/version, khôn
   hiện tại và gọi cùng reviewed commerce use-case của API trực tiếp. Không dùng
   adapter `None`/no-op/test double trong production; không fork mutation logic trong
   RAG. Confirmation token không thay authorization hoặc idempotency.
+- Proposal chỉ được phát từ typed `action_context` do UI/server state cung cấp và có
+  zero side effect. Token hash bind owner/session/action/resource/payload, TTL <= 300
+  giây, consume một lần. Trước mutation attempt phải lock row và bind atomically cả
+  `client_message_id` lẫn hash `Idempotency-Key`; retry chỉ hợp lệ khi cả hai khớp.
+- Confirmation luôn reauthorize/revalidate version/price/stock/coupon/order/refund
+  eligibility từ SQL rồi gọi cùng reviewed commerce use-case với API trực tiếp.
 
 ## 6. Hybrid ranking đề xuất
 

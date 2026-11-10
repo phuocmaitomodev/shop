@@ -1,7 +1,8 @@
 # Acceptance test plan
 
-> **Acceptance gate hiện hành:** Yêu cầu trực tiếp ngày 2026-11-03 mở lại
-> commerce và tám nhóm chatbot. `EXP-CONTRACT-01..10` trong
+> **Acceptance gate hiện hành:** Yêu cầu phục hồi LAI ngày 2026-11-10 khóa
+> filter/guard -> router allow-list -> RAG/controlled tools -> HITL cho commerce và
+> tám nhóm chatbot. `EXP-CONTRACT-01..10` trong
 > [`commerce-chatbot-expansion-contract.md`](commerce-chatbot-expansion-contract.md)
 > là P0; các gate MVP/RET vẫn áp dụng cho phần catalog/policy không xung đột.
 
@@ -178,3 +179,32 @@ Kiểm tra ít nhất: header/menu/search, listing/filter, product variant CTA, 
   chứng minh không có mutation trước confirm.
 - UI/E2E ghi rõ COD/online/refund là mô phỏng, tiếng Việt/VND, responsive và
   không có request tới payment/refund provider bên ngoài.
+
+### 12.1. Ma trận recovery LAI bắt buộc
+
+| Slice | P | Bài kiểm tra bắt buộc | Oracle |
+|---|---|---|---|
+| Filter/guard | P0 | user/source/history injection, oversize, SQL/XSS-like text, outside shop, ambiguous commerce text | Guard chạy trước dependency; `out_of_scope` hoặc `insufficient_data` ổn định; products/sources/proposal rỗng; zero provider/retrieval/tool/mutation |
+| Closed router | P0 | positive/negative/paraphrase/follow-up cho đủ 8 group; unknown enum/extra field/provider disagreement | Chỉ intent + operation class allow-list; read không thành mutation; không dispatch tên tool/model output |
+| Grounded RAG | P0 | knowledge active/indexed/current vs inactive/pending/failed/stale/mixed; product live price/stock/promotion; hallucinated IDs | Citation/candidate thuộc retrieval set; SQL hydration hiện tại; thiếu nguồn `insufficient_data`; provider failure bounded |
+| Controlled reads | P0 | authenticated precedence; guest cart cookie; exact guest order code + lookup header; IDOR/missing credential; production dependency wiring | Owner check trước SQL; typed DTO; amount/status từ SQL; `None`/mock-only wiring không PASS |
+| HITL mutation | P0 | prose không context; proposal; explicit confirm; wrong owner/resource; TTL; replay; changed payload/key/version/price/stock/state; concurrent consume | Proposal zero side effect; TTL <= 300s; atomic binding; shared use-case; exactly-once inventory/refund; stable code |
+| Frontend | P0 | authoritative context, proposal impact, Confirm/Cancel, duplicate click, uncertain network retry, server refresh, desktop/mobile/a11y | Tiếng Việt/VND/demo; cùng binding khi retry; không localStorage token; không che CTA; không console error |
+| Independent QA | P0 | exact producer SHAs trên clean PostgreSQL/pgvector + deterministic provider + desktop/mobile browser | QA không sửa producer; zero discovered mandatory tests = FAIL; Gemini thiếu key = SKIP riêng, không PASS |
+
+Stable routing results: injection/outside shop -> HTTP 200 `out_of_scope`; ambiguous
+in-scope/missing source/context/credential -> HTTP 200 `insufficient_data`; provider
+failure -> HTTP 200 `provider_unavailable`; schema unknown -> HTTP 422;
+`RATE_LIMITED` -> HTTP 429. Mọi fail-closed case không lộ resource/token/prompt/error raw.
+
+Stable mutation errors phải assert bằng `error.code`, không parse message:
+`RESOURCE_NOT_FOUND` (404); `CONFIRMATION_INVALID`, `CONFIRMATION_EXPIRED`,
+`CONFIRMATION_ALREADY_USED`, `CONFIRMATION_PAYLOAD_CHANGED`,
+`IDEMPOTENCY_KEY_REUSED`, `CART_VERSION_CONFLICT`, `PRICE_CHANGED`,
+`OUT_OF_STOCK`, `ORDER_STATUS_NOT_CANCELLABLE`, `REFUND_NOT_ELIGIBLE` (409), cùng
+các mã coupon đã khóa. Exact retry cùng binding trả snapshot cũ; đổi một thành phần
+phải fail closed.
+
+`RAG-06/07` vẫn là P0: test phải chứng minh follow-up cùng server-derived session và
+anonymous transcript không đọc được chỉ bằng session UUID. Bounded history do client gửi
+không phải bằng chứng PASS cho session ownership/persistence.

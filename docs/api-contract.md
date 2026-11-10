@@ -1,10 +1,10 @@
 # API contract frontend ↔ backend
 
-> **Contract hiện hành:** Yêu cầu trực tiếp ngày 2026-11-03 mở lại commerce
-> và tám nhóm chatbot. [`commerce-chatbot-expansion-contract.md`](commerce-chatbot-expansion-contract.md)
-> khóa surface cart/order/payment demo/refund demo, ownership, idempotency và
-> confirmation. Tài liệu `mvp-product-rag-scope.md` chỉ còn là baseline catalog
-> và grounding ở phần không xung đột.
+> **Contract hiện hành:** Yêu cầu phục hồi LAI ngày 2026-11-10 khóa pipeline
+> filter/guard -> router allow-list -> RAG/controlled tools -> HITL theo
+> [`commerce-chatbot-expansion-contract.md`](commerce-chatbot-expansion-contract.md).
+> Nó ghi đè mô tả MVP thu gọn ở phần xung đột và giữ surface commerce mở rộng,
+> ownership, idempotency, confirmation và grounding làm P0.
 
 ## 1. Quy ước chung
 
@@ -136,9 +136,9 @@ API trả chi tiết item/giá mới để frontend yêu cầu user xác nhận 
 
 ## 5. Chat và support
 
-### Contract MVP hiện hành
+### Contract LAI hiện hành
 
-`POST /chat` là endpoint chat công khai, không lưu transcript. Request gồm
+`POST /chat` là compatibility endpoint công khai. Request gồm
 `message` (1–1000 ký tự, không chỉ có khoảng trắng), tối đa 6 phần tử `history`
 và `action_context` typed nullable; mỗi history item có `role` (`user` hoặc
 `assistant`) và `content` 1–1000 ký tự. `action_context` là discriminated union
@@ -151,8 +151,10 @@ ID hoặc amount; request không nhận amount/totals/status/tool/endpoint.
 Response dùng success envelope và trả `answer`, `products`, `sources`, `status`.
 `status` thuộc `ok`, `insufficient_data`, `out_of_scope`, `provider_unavailable`.
 Product card và source ID chỉ được tạo từ retrieval set đã hydrate lại bằng SQL;
-link sản phẩm có dạng `/san-pham/{slug}`. Endpoint không tạo session, ticket hoặc
-lưu lịch sử. Các endpoint session/support bên dưới là contract lịch sử ngoài MVP.
+link sản phẩm có dạng `/san-pham/{slug}`. Client-supplied `history` luôn untrusted;
+endpoint này không đủ để chứng minh session isolation `RAG-06/07`. Release LAI phải
+có server-derived session/anonymous ownership boundary theo các endpoint session bên
+dưới hoặc contract tương đương được OpenAPI + consumer + QA review đồng bộ.
 Endpoint áp dụng rate limit theo IP và trả error envelope `RATE_LIMITED` với HTTP
 429 khi vượt ngưỡng cấu hình.
 
@@ -169,6 +171,21 @@ ownership/action adapter để issue/consume one-time token, reauthorize/revalid
 gọi cùng reviewed commerce use-case của API trực tiếp. Test double/no-op/`None`
 không phải implementation hợp lệ.
 
+Pipeline dispatch khóa như sau:
+
+| Operation class | Intent | Server-selected operation | Điều kiện |
+|---|---|---|---|
+| `rag_read` | `policy_question`, `product_search`, `product_compare` | `knowledge_retrieve` hoặc `product_retrieve` | Source/candidate validated; product hydrate SQL hiện tại |
+| `sql_read` | `cart_read`, `order_lookup`, `payment_demo_status`, `refund_status` | `cart_read`, `order_read`, `payment_demo_read`, `refund_demo_read` | Owner derive trước query; production repository bắt buộc |
+| `mutation_proposal` | cart/order/refund mutation | DB-backed action adapter | Typed `action_context`; proposal zero side effect |
+| `greeting` | `greeting` | Template tiếng Việt | Không token/tool |
+| `reject` | `out_of_scope`, `prompt_injection`, unknown/ambiguous | Không operation | `out_of_scope` hoặc `insufficient_data`; zero call |
+
+Model output không chứa/không chọn operation name, SQL, endpoint, resource ID,
+amount, total hoặc status. Dependency production cho owner/read/action không được trả
+`None`; nếu chưa wire, read trả `insufficient_data`, mutation trả fail-closed và release
+gate FAIL.
+
 Lượt đề xuất gửi `action_context` và không gửi `confirmation_token`. Lượt xác nhận
 gửi `confirmation_token` server-issued cùng `client_message_id` UUID, không gửi lại
 `action_context`, và bắt buộc header `Idempotency-Key` (8–200 ký tự). Token được lưu
@@ -178,6 +195,37 @@ trả `IDEMPOTENCY_KEY_REUSED`.
 Guest đã mất/hết hạn cookie cart gửi `X-Order-Lookup-Token` (20–200 ký tự) trong cả
 lượt đề xuất và xác nhận `order_cancel`/`refund_request`; session authenticated luôn
 có ưu tiên và lookup token không được vượt ownership của user khác.
+
+Filter/guard chạy trước mọi provider/retrieval/tool. Mapping public ổn định:
+
+- injection hoặc ngoài shop: HTTP 200, `status=out_of_scope`, arrays rỗng,
+  `proposed_action=null`;
+- in-scope nhưng thiếu/ambiguous context/source/credential: HTTP 200,
+  `status=insufficient_data` và câu hỏi làm rõ;
+- provider timeout/failure trên RAG path: HTTP 200, `status=provider_unavailable`;
+- unknown field/schema: HTTP 422; rate-limit: `RATE_LIMITED` HTTP 429.
+
+Lượt proposal không được mutation. `confirmation_token` có TTL tối đa 300 giây, lưu
+hash, bind owner/session/action/resource/normalized payload. Trước mutation attempt,
+server lock confirmation row và bind atomically cả `client_message_id` lẫn hash
+`Idempotency-Key`; sau đó reauthorize và revalidate SQL hiện tại rồi gọi cùng use-case
+với API trực tiếp.
+
+Error code public cho confirmation/ownership:
+
+| HTTP | `error.code` | Nghĩa |
+|---|---|---|
+| 404 | `RESOURCE_NOT_FOUND` | Resource absent hoặc foreign; không tiết lộ phân biệt |
+| 409 | `CONFIRMATION_INVALID` | Token/hash/binding không hợp lệ |
+| 409 | `CONFIRMATION_EXPIRED` | TTL đã hết |
+| 409 | `CONFIRMATION_ALREADY_USED` | Token đã consume và không phải exact retry |
+| 409 | `CONFIRMATION_PAYLOAD_CHANGED` | Payload normalized không còn khớp |
+| 409 | `IDEMPOTENCY_KEY_REUSED` | Cùng key nhưng binding/request hash khác |
+
+Exact retry cùng owner/payload/`client_message_id`/key trả response snapshot cũ; retry
+khác một thành phần phải fail closed. Business revalidation giữ các mã
+`CART_VERSION_CONFLICT`, `PRICE_CHANGED`, `OUT_OF_STOCK`,
+`ORDER_STATUS_NOT_CANCELLABLE`, `REFUND_NOT_ELIGIBLE` và mã coupon ở mục 4.
 
 Mỗi phần tử `sources` dùng schema additive sau:
 

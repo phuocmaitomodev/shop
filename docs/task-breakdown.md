@@ -1,7 +1,9 @@
 # Task breakdown và dependency
 
-> **Kế hoạch hiện hành:** Yêu cầu trực tiếp ngày 2026-11-03 mở rộng commerce
-> và chatbot tám nhóm. Graph `EXP-*` trên board `shop` và contract
+> **Kế hoạch hiện hành:** Yêu cầu phục hồi LAI ngày 2026-11-10 khóa pipeline
+> filter/guard -> router allow-list -> RAG/controlled tools -> HITL trên baseline
+> `6cc1ad99ace66bfdb6e1f19f2d6f5a89c0b0ae2f`. Graph `LAI-REC-*` trên board
+> `shop` và contract
 > [`commerce-chatbot-expansion-contract.md`](commerce-chatbot-expansion-contract.md)
 > ghi đè kế hoạch MVP/RET ở phần xung đột. Artifact lịch sử chỉ được tái sử dụng
 > sau review diff/test; không cherry-pick mù hoặc đụng worktree dirty.
@@ -249,3 +251,41 @@ Không consumer nào được bỏ qua gap bằng test double. Worktree RAG part
 bảo toàn làm evidence/source patch, không commit hoặc coi là prerequisite reviewed;
 gap finalization phải port tối thiểu lên chuỗi reviewed, chạy production DB-backed
 tests và bàn giao commit sạch.
+
+## 14. Graph recovery LAI hiện hành
+
+Branch EXP cũ không phải dependency. Mỗi worker audit immutable SHA bằng merge-base,
+`git cherry`/patch-id, diff và worktree cleanliness; chỉ port patch tối thiểu khi chưa
+equivalent và contract còn hiệu lực. Không lấy dirty/untracked file làm evidence, không
+cherry-pick tail lịch sử partial/superseded.
+
+| ID | Owner | Deliverable | Depends on | Acceptance/handoff |
+|---|---|---|---|---|
+| LAI-REC-00 | `shop-orchestrator` | Audit baseline + historical SHA; freeze six slices, API/status/error/ownership/HITL contract trong 5 docs | main `6cc1ad99...` | EXP-CONTRACT-01..10, RAG-01..14, SEC-01..03; docs-only commit sạch |
+| LAI-REC-01 | `shop-rag` | TDD filter/guard và closed router; zero-call reject; read/mutation split; preserve product/return regressions | LAI-REC-00 exact reviewed SHA | EXP-CONTRACT-01/03/06/08/10, RAG-09/10/13 |
+| LAI-REC-02 | `shop-rag` | Grounded product/knowledge RAG + production controlled read repository/ownership wiring; session isolation | LAI-REC-00/01 | EXP-CONTRACT-02/03/07/08, RAG-01..14, SEC-01 |
+| LAI-REC-03 | `shop-backend` | Typed proposal/confirmation DB adapter; TTL <= 5m; atomic binding; reauth/revalidation; shared use-cases; PostgreSQL concurrency | LAI-REC-00/01/02 | EXP-CONTRACT-03..07/10, SEC-01..03 |
+| LAI-REC-04 | `shop-frontend` | Authoritative `action_context`, Vietnamese proposal impact + Confirm/Cancel, retry/state refresh, responsive/a11y/demo UX | LAI-REC-00..03 | EXP-CONTRACT-04..10, UI-01..06, SEC-02 |
+| LAI-REC-05 | `shop-qa` | Independent exact-SHA review, clean PostgreSQL/pgvector, deterministic RAG, concurrency, desktop/mobile browser, secret/external-call scan | LAI-REC-01..04 | Explicit PASS/FAIL for EXP-CONTRACT-01..10, RAG P0, SEC/UI P0 |
+| LAI-REC-REL | `shop-orchestrator` | Canonical reviewed integration, all clean-room gates, disposable merge proof và PR-ready/HOLD handoff | LAI-REC-00..05 | Không push/merge; one branch/full SHA hoặc HOLD |
+
+```text
+LAI-REC-00 contract
+  -> LAI-REC-01 filter/guard + closed router
+  -> LAI-REC-02 grounded RAG + controlled reads
+  -> LAI-REC-03 HITL backend
+  -> LAI-REC-04 frontend
+  -> LAI-REC-05 independent QA
+  -> LAI-REC-REL
+```
+
+Sáu logical slice là filter/guard, closed router, grounded RAG/controlled reads, HITL
+mutation, frontend và independent QA; LAI-REC-01 gộp hai slice đầu trong một producer
+để tránh hai worker cùng sửa router. Không stage downstream được bắt đầu bằng test
+double thay producer thật. LAI-REC-05 phải gọi zero discovered mandatory tests là FAIL
+và báo Gemini smoke SKIP riêng khi thiếu key.
+
+Handoff mỗi task bắt buộc có: task/acceptance IDs, full base/final SHA, branch/worktree,
+files, API/schema/config/migration impact, exact commands + actual pass/fail/skip,
+cleanliness, dependencies và risks. Worker có thể commit task branch sạch nhưng không
+push, merge, rebase `main` hoặc rewrite history.

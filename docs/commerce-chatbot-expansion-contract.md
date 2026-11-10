@@ -2,7 +2,13 @@
 
 ## 1. Quyết định phạm vi
 
-Yêu cầu trực tiếp ngày 2026-11-03 mở rộng release gate từ addendum MVP cũ sang website bán hàng và chatbot hỗ trợ tám nhóm nghiệp vụ. Tài liệu này ghi đè `mvp-product-rag-scope.md` ở phần xung đột; `request.md` vẫn là yêu cầu gốc và không được sửa.
+Yêu cầu trực tiếp ngày 2026-11-10 khôi phục pipeline LAI theo thứ tự
+`filter/guard -> router allow-list đóng -> RAG hoặc controlled tools -> HITL` là
+release gate hiện hành. Nó tiếp tục quyết định mở rộng ngày 2026-11-03 và ghi đè
+addendum MVP cũ trong `mvp-product-rag-scope.md` ở phần xung đột; `request.md` vẫn
+là yêu cầu gốc và không được sửa. Baseline phục hồi là
+`6cc1ad99ace66bfdb6e1f19f2d6f5a89c0b0ae2f`; branch EXP lịch sử chỉ là evidence,
+không phải prerequisite có thể cherry-pick nguyên nhánh.
 
 Trong phạm vi:
 
@@ -40,12 +46,62 @@ Intent nội bộ là allow-list đóng:
 
 Intent không phải field công khai bắt buộc. Tool/action allow-list chỉ gồm các service method tương ứng; model không tạo SQL, path, URL, ID, amount, status hoặc tên tool. Intent không nhận diện chắc chắn phải fail closed thành `out_of_scope` hoặc hỏi làm rõ mà không tạo side effect. `prompt_injection` luôn không gọi mutation tool.
 
+### 2.1. Pipeline LAI bắt buộc
+
+Mỗi request đi qua đúng một chiều, không được nhảy stage:
+
+1. **Filter/guard** chạy trước model/retrieval/tool. Nó giới hạn input/history,
+   rate-limit, phát hiện user/source injection, đánh dấu mọi prose/history/source là
+   untrusted và không được làm thay đổi policy. Injection hoặc yêu cầu ngoài shop trả
+   `status=out_of_scope`, `products=[]`, `sources=[]`, `proposed_action=null` và gọi
+   zero retrieval/tool/mutation. Input có vẻ thuộc shop nhưng thiếu/ambiguous action
+   hoặc resource trả `status=insufficient_data` với câu hỏi làm rõ và cũng gọi zero
+   side effect.
+2. **Router allow-list đóng** chỉ trả một intent trong mục 2 và một operation class
+   `rag_read | sql_read | mutation_proposal | greeting | reject`. Unknown enum,
+   field thừa, output model sai schema hoặc router/model bất đồng đều fail closed;
+   không dispatch bằng tên tool do model sinh.
+3. **RAG hoặc controlled read tool** được chọn server-side. Allow-list nội bộ chỉ gồm
+   `product_retrieve`, `knowledge_retrieve`, `cart_read`, `order_read`,
+   `payment_demo_read`, `refund_demo_read`. Hai tool đầu trả candidate/source đã
+   validate; bốn tool commerce derive owner trước query và trả typed DTO từ SQL.
+   Model không nhận SQL, endpoint, credential hay quyền chọn resource ID.
+4. **HITL mutation** chỉ bắt đầu khi request có `action_context` typed từ UI/server
+   state tin cậy. Mutation prose không có context không được tạo proposal. Proposal
+   luôn zero side effect; execution chỉ xảy ra ở request xác nhận riêng với token một
+   lần, `client_message_id` và `Idempotency-Key` hợp lệ.
+
+Read path và mutation path phải tách structurally. Không được để một provider call,
+fallback hay generic tool executor tự chuyển read thành mutation.
+
+### 2.2. Kết quả fail-closed ổn định
+
+- `prompt_injection` và ngoài phạm vi: HTTP 200 với `status=out_of_scope`.
+- In-scope nhưng thiếu source/context/credential hoặc ambiguous: HTTP 200 với
+  `status=insufficient_data`; câu trả lời tiếng Việt nêu cần làm rõ, không giả PASS.
+- Provider lỗi/timeout sau khi đã chọn RAG: HTTP 200 với
+  `status=provider_unavailable`; commerce API và controlled SQL reads không phụ thuộc
+  provider để commit.
+- Schema request sai/unknown field: HTTP 422; rate limit: `RATE_LIMITED` HTTP 429.
+- Không response fail-closed nào được chứa token, ID resource nước ngoài, raw provider
+  error, system prompt hoặc chi tiết cho biết resource bị từ chối có tồn tại.
+
 ## 3. Identity, ownership và privacy
 
-- Authenticated customer chỉ đọc/sửa cart, order và refund request thuộc `user_id` của mình.
-- Guest dùng cookie HttpOnly `SameSite=Lax` chứa token opaque ngẫu nhiên; database chỉ lưu hash. Không dùng cart/order UUID làm bằng chứng sở hữu.
+- Owner được derive server-side trước mọi read/proposal/confirmation. Model,
+  `message`, `history`, retrieval source, `action_context` và ID client gửi lên không
+  phải bằng chứng quyền.
+- Authenticated session hợp lệ luôn có precedence; customer chỉ đọc/sửa cart, order,
+  payment demo và refund request thuộc `user_id` của mình. Server không fallback sang
+  guest credential khi session không sở hữu resource.
+- Guest cart chỉ dùng cookie HttpOnly `SameSite=Lax` chứa token opaque ngẫu nhiên;
+  database chỉ lưu hash. Không nhận cart token từ prose/body/header tùy ý và không dùng
+  cart/order UUID làm bằng chứng sở hữu.
 - Guest cart owner là `guest_token_hash`. Khi đăng nhập, merge cart phải có transaction, rule deterministic và không cho chiếm cart khác.
-- Tạo guest order trả `order_code` và lookup token opaque một lần; database lưu hash. Tra cứu guest cần cả hai, so sánh constant-time và rate limit. Không tra bằng order code đơn lẻ, phone hoặc email.
+- Tạo guest order trả `order_code` và lookup token opaque một lần; database lưu hash.
+  Mọi read/proposal/confirmation guest trên order, payment demo hoặc refund cần exact
+  `order_code` của request cùng `X-Order-Lookup-Token`; so sánh hash constant-time và
+  rate limit. Không tra bằng order code đơn lẻ, UUID, phone, email hoặc token trong URL/log.
 - Authenticated lookup dùng session và ownership; không chấp nhận lookup token để vượt ownership của user khác.
 - Chat history gửi từ client là dữ liệu không tin cậy và không cấp quyền. Không đặt token, cookie, PII, admin note, password hash hoặc secret vào prompt/log.
 - Admin API cần role `admin`; chatbot customer không gọi admin API.
@@ -195,8 +251,14 @@ Mọi enum/check/index/FK phải nằm trong migration. PII/order snapshots khô
 - Rate limit theo IP/session/owner cho chat, lookup và mutation; log redacted kèm request ID.
 - Provider unavailable không ảnh hưởng catalog/cart/order APIs; mutation không phụ thuộc Gemini để commit.
 - Production wiring không được trả `None`, dùng no-op adapter hoặc test double. Nếu
-  DB-backed ownership/action adapter chưa sẵn sàng, mutation chat phải unavailable
-  fail closed; test-double-only không đạt release gate.
+  DB-backed ownership/read/action adapter chưa sẵn sàng, controlled read trả
+  `insufficient_data` và mutation chat phải unavailable fail closed; test-double-only
+  không đạt release gate. Compatibility endpoint có dependency seam trả `None` chỉ là
+  baseline gap, không phải production implementation.
+- Context nối tiếp và anonymous isolation theo `RAG-06/07` là P0: client-supplied
+  bounded history có thể là input untrusted nhưng không thay thế server-derived session
+  ownership. Session/transcript chỉ đọc được bằng authenticated owner hoặc anonymous
+  secret token hash; session UUID đơn lẻ không cấp quyền.
 
 ## 9. Side-effect confirmation UX
 
@@ -206,11 +268,63 @@ Mọi enum/check/index/FK phải nằm trong migration. PII/order snapshots khô
 - Confirmation bị hết hạn, đã dùng, sai owner, payload thay đổi hoặc resource đổi trạng thái phải fail closed và yêu cầu tạo proposal mới.
 - UI không gọi mutation chỉ vì model trả câu khẳng định; chỉ gọi endpoint typed với token server cấp.
 
-## 10. Acceptance IDs
+## 10. Sáu recovery slice và dependency freeze
 
-- `EXP-CONTRACT-01`: tám nhóm được route vào allow-list; unknown/injection fail closed.
+| Slice | Owner chính | Contract khóa | Gate |
+|---|---|---|---|
+| 1. Filter/guard | `shop-rag` | Chạy trước provider/retrieval/tool; injection/out-of-scope/oversize/ambiguous fail closed và zero call | `EXP-CONTRACT-01/06/08/10`, `RAG-08..10/13`, `SEC-03` |
+| 2. Closed router | `shop-rag` | Intent + operation class enum đóng; read và mutation tách; unknown/model disagreement không dispatch | `EXP-CONTRACT-01/06`, `RAG-09/10/13` |
+| 3. Grounded RAG + controlled reads | `shop-rag` + `shop-backend` | Knowledge active/indexed/current; product live SQL hydration; owner-first cart/order/payment/refund DTO; production adapter không `None` | `EXP-CONTRACT-02/03/07/08`, `RAG-01..14`, `SEC-01` |
+| 4. Proposal/confirmation HITL | `shop-backend` | Typed `action_context`; zero-side-effect proposal; token one-time TTL <= 5 phút; atomic binding, reauthorization/revalidation, shared use-case | `EXP-CONTRACT-03..07/10`, `SEC-01..03` |
+| 5. Frontend tiếng Việt responsive | `shop-frontend` | Context từ state authoritative; impact + Confirm/Cancel; retry cùng binding; refresh server state; VND/demo; không che CTA | `EXP-CONTRACT-04..10`, `UI-01..06`, `SEC-02` |
+| 6. Clean-room QA độc lập | `shop-qa` | Review exact SHA; PostgreSQL/pgvector sạch; deterministic provider; desktop/mobile; concurrency/exactly-once; secret/external-call scan | `EXP-CONTRACT-01..10`, `RAG-01..14`, `SEC-01..03` |
+
+Dependency cứng: contract -> filter/guard + router -> grounded RAG/controlled reads ->
+HITL backend -> frontend -> independent QA -> release integration. Frontend có thể
+chuẩn bị component theo contract nhưng không PASS trước producer thật; QA không sửa
+producer worktree. Mọi behavior change dùng TDD. Worker được commit task branch sạch
+nhưng không push/merge/rebase `main` hoặc rewrite history.
+
+### 10.1. Audit patch-equivalence tại baseline
+
+`git cherry 6cc1ad99... <tip>` và inspection diff được dùng để phân biệt patch đã có
+trên main với branch lịch sử. “Semantic present” không đồng nghĩa branch có thể
+cherry-pick; gap production vẫn phải được test lại trên baseline.
+
+| Historical SHA | Merge-base với baseline | Worktree lúc audit | Patch-equivalence/gap | Disposition |
+|---|---|---|---|---|
+| `54b8b3a01f2cb0e3d1fd1c39539dcfaa570a2cda` | `6a13a90640ab1be21206f5c202d1f5630b7e2631` | sạch | `git cherry` là `+`; patch-id `6b3db275...`; thêm ownership read và knowledge contract nhưng dùng `EXP-CONTRACT-11/12` ngoài gate hiện hành | Chỉ port semantics đã khóa trong 01..10; không cherry-pick |
+| `a0c12c03df211497292f0fc4f4b0a28870e64b43` | `be81a61ff5664b46004c8d645d12732ff38c2ab3` | sạch | `git cherry` là `+`, nhưng strict guest order-code/token và intent hardening đã hiện diện semantically trên main; default controlled-read dependencies vẫn `None` | Reference cho slice 1–3; reimplement/test trên baseline |
+| `ff62de50fae3ff1c4a641818445cdf01409f2491` | `be81a61ff5664b46004c8d645d12732ff38c2ab3` | sạch | `git cherry` là `-`; patch-id `44f3d2d5...`; binding `client_message_id` + hash `Idempotency-Key` đã patch-equivalent trên main | Không port lại; giữ làm oracle concurrency |
+| `b019a8435645e6abffb73c3ed516b7343732e23c` | `be81a61ff5664b46004c8d645d12732ff38c2ab3` | sạch | `git cherry` là `-`; cùng patch-id `44f3d2d5...` với `ff62de5`, nhưng branch kéo theo tail RAG lịch sử | Duplicate evidence; tuyệt đối không cherry-pick tail |
+| `49b55230ef4786d11e6654b3c6e9474e6882ab91` | `6a13a90640ab1be21206f5c202d1f5630b7e2631` | dirty, có FE edits/untracked tests ngoài commit | Commit có cùng patch-id `6b3db275...` với `54b8b3a`; `git cherry` là `+`; dirty state không phải evidence | Không dùng worktree; chỉ đối chiếu immutable commit |
+| `195dbbe6aecad620569b60f750b965902ba7d2f9` | `be81a61ff5664b46004c8d645d12732ff38c2ab3` | dirty, có QA E2E/report ngoài commit | `git cherry` là `-`; fixture/validator 10 acceptance ID đã patch-equivalent trên main, nhưng chỉ chứng minh contract corpus planned | Giữ fixture làm oracle; clean-room QA mới quyết định PASS |
+
+Kết luận audit: không SHA lịch sử nào được cherry-pick nguyên branch. Hai cặp duplicate
+(`54b8b3a`/`49b5523`, `ff62de5`/`b019a84`) chỉ được tính một patch; dirty/untracked
+artifact không được đưa vào handoff nếu chưa review và commit riêng.
+
+## 11. Stable mutation errors
+
+- `RESOURCE_NOT_FOUND` HTTP 404 cho resource không thuộc owner, không phân biệt absent/foreign.
+- `CONFIRMATION_INVALID`, `CONFIRMATION_EXPIRED`,
+  `CONFIRMATION_ALREADY_USED`, `CONFIRMATION_PAYLOAD_CHANGED` HTTP 409 cho token
+  tương ứng; exact retry cùng owner/payload/`client_message_id`/key trả snapshot cũ,
+  còn binding khác trả `IDEMPOTENCY_KEY_REUSED` HTTP 409.
+- Revalidation dùng mã nghiệp vụ hiện có:
+  `CART_VERSION_CONFLICT`, `PRICE_CHANGED`, `OUT_OF_STOCK`,
+  `ORDER_STATUS_NOT_CANCELLABLE`, `REFUND_NOT_ELIGIBLE`,
+  `COUPON_INVALID`, `COUPON_EXPIRED`, `COUPON_NOT_APPLICABLE`.
+- Backend có thể map mã nội bộ cụ thể sang `RESOURCE_NOT_FOUND` ở public chat boundary
+  để chống enumeration; frontend chỉ dựa vào `error.code`, không parse message.
+
+## 12. Acceptance IDs
+
+- `EXP-CONTRACT-01`: tám nhóm đi qua filter/guard rồi router allow-list đóng;
+  unknown/injection/ambiguous không gọi retrieval/tool/mutation và trả status ổn định.
 - `EXP-CONTRACT-02`: cart/order/payment/refund API và error codes khớp OpenAPI + consumer types.
-- `EXP-CONTRACT-03`: user/guest/admin ownership; đổi ID/token không truy cập resource khác.
+- `EXP-CONTRACT-03`: user/guest/admin ownership server-derived; authenticated precedence;
+  guest cart cookie và guest order code + lookup header; đổi ID/token không truy cập resource khác.
 - `EXP-CONTRACT-04`: retry mutation idempotent; key reuse payload khác 409; stock không double-change.
 - `EXP-CONTRACT-05`: order/payment/refund state machines từ chối transition sai.
 - `EXP-CONTRACT-06`: chat mutation chỉ dùng typed `action_context` từ UI/server
@@ -218,10 +332,11 @@ Mọi enum/check/index/FK phải nằm trong migration. PII/order snapshots khô
   cùng reviewed commerce use-case; không side effect từ prose/injection, không
   model-generated ID/amount và không test-double-only.
 - `EXP-CONTRACT-07`: payment/refund luôn mô phỏng, VND từ SQL, không external call/credential.
-- `EXP-CONTRACT-08`: policy/product dynamic data grounded đúng source; stale/missing/provider failure an toàn.
+- `EXP-CONTRACT-08`: knowledge active/indexed/current, product và commerce reads hydrate
+  SQL sau authorization; stale/missing/provider failure an toàn; session isolation đạt RAG-06/07.
 - `EXP-CONTRACT-09`: frontend responsive desktop/mobile, copy tiếng Việt, không che CTA, không console error.
 - `EXP-CONTRACT-10`: clean migration/seed/run, backend/RAG/frontend/E2E/secret scan pass.
 
-## 11. Non-goals chung
+## 13. Non-goals chung
 
 Không payment/refund/shipping thật; không email/SMS/social login/live chat/CRM; không production deployment; không để LLM làm authorization, tính tiền hoặc quyết định state transition; không cherry-pick mù branch lịch sử; không sửa `request.md`; không push hoặc merge `main` từ worker.
