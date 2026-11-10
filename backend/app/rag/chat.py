@@ -163,17 +163,13 @@ class CommerceOwnershipContext:
                 self.order_lookup_token_hash,
             )
         )
-        guest_cart = self.guest_token_hash is not None and all(
-            value is None
-            for value in (self.user_id, self.order_code, self.order_lookup_token_hash)
+        guest = self.user_id is None and (
+            self.guest_token_hash is not None
+            or self.order_lookup_token_hash is not None
         )
-        guest_order_lookup = (
-            self.order_code is not None
-            and self.order_lookup_token_hash is not None
-            and self.user_id is None
-            and self.guest_token_hash is None
-        )
-        if sum((authenticated, guest_cart, guest_order_lookup)) != 1:
+        if self.order_code is not None and self.order_lookup_token_hash is None:
+            guest = False
+        if sum((authenticated, guest)) != 1:
             raise ValueError("invalid commerce ownership evidence")
 
 
@@ -622,12 +618,9 @@ def _has_order_lookup_evidence(
 ) -> bool:
     if context.user_id is not None:
         return True
-    return bool(
-        context.order_code
-        and context.order_code.upper() == order_code
-        and context.order_lookup_token_hash
-        and context.order_lookup_token_hash.strip()
-    )
+    if not context.order_lookup_token_hash:
+        return False
+    return context.order_code is None or context.order_code.upper() == order_code
 
 
 def _normalize_price(match: re.Match[str]) -> int:

@@ -1,13 +1,17 @@
 from dataclasses import asdict
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, Header, Request, status
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import Settings, get_settings
 from app.core.errors import AppError
 from app.core.rate_limit import InMemoryRateLimiter
+from app.core.security import hash_token
 from app.commerce.chat_actions import DatabaseChatActionAdapter
 from app.db.session import get_db_session
+from app.models.auth import AuthSession, User
 from app.rag.chat import (
     ChatHistoryTurn,
     CommerceOwnershipContext,
@@ -17,6 +21,7 @@ from app.rag.chat import (
     orchestrate_chat,
 )
 from app.rag.provider import DeterministicEmbeddingProvider, GeminiEmbeddingProvider
+from app.rag.commerce_reads import DatabaseCommerceReadRepository
 from app.schemas.chat import ChatEnvelope, ChatRequest, ChatResponse
 from app.schemas.common import ErrorEnvelope
 
@@ -24,16 +29,50 @@ from app.schemas.common import ErrorEnvelope
 router = APIRouter(tags=["chat"])
 
 
-def get_commerce_read_repository() -> CommerceReadRepository | None:
-    """Integration seam until the commerce backend publishes its repository."""
+def get_commerce_read_repository(
+    session: AsyncSession = Depends(get_db_session),
+) -> CommerceReadRepository:
+    return DatabaseCommerceReadRepository(session)
 
-    return None
 
+async def get_commerce_ownership_context(
+    request: Request,
+    session: AsyncSession = Depends(get_db_session),
+    settings: Settings = Depends(get_settings),
+) -> CommerceOwnershipContext | None:
+    auth_token = request.cookies.get(settings.auth_cookie_name)
+    if auth_token:
+        user_id = await session.scalar(
+            select(User.id)
+            .join(AuthSession, AuthSession.user_id == User.id)
+            .where(
+                AuthSession.refresh_token_hash == hash_token(auth_token),
+                AuthSession.revoked_at.is_(None),
+                AuthSession.expires_at > datetime.now(timezone.utc),
+                User.is_active.is_(True),
+            )
+        )
+        if user_id is not None:
+            return CommerceOwnershipContext(user_id=user_id)
 
-def get_commerce_ownership_context() -> CommerceOwnershipContext | None:
-    """Integration seam for server-derived user/guest ownership evidence."""
-
-    return None
+    guest_token = request.cookies.get(settings.guest_cookie_name)
+    lookup_token = request.headers.get("X-Order-Lookup-Token")
+    guest_hash = (
+        hash_token(guest_token)
+        if guest_token is not None and 1 <= len(guest_token) <= 200
+        else None
+    )
+    lookup_hash = (
+        hash_token(lookup_token)
+        if lookup_token is not None and 20 <= len(lookup_token) <= 200
+        else None
+    )
+    if guest_hash is None and lookup_hash is None:
+        return None
+    return CommerceOwnershipContext(
+        guest_token_hash=guest_hash,
+        order_lookup_token_hash=lookup_hash,
+    )
 
 
 def _chat_provider(settings: Settings):

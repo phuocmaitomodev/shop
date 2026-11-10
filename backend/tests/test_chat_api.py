@@ -170,6 +170,120 @@ def _create_guest_order_for_chat_action(
     return created.json()["data"]
 
 
+def test_chat_cart_read_uses_production_owner_scoped_sql_tool(
+    auth_client: TestClient,
+    chat_action_catalog: dict[str, str],
+) -> None:
+    created = auth_client.post(
+        "/api/v1/cart/items",
+        json={"variant_id": chat_action_catalog["variant_id"], "quantity": 2},
+    )
+    assert created.status_code == 201, created.text
+
+    response = auth_client.post(
+        "/api/v1/chat",
+        json={"message": "Cho tôi xem giỏ hàng hiện tại"},
+    )
+
+    assert response.status_code == 200, response.text
+    data = response.json()["data"]
+    assert data["status"] == "ok"
+    assert data["products"] == []
+    assert data["sources"] == []
+    assert "2 sản phẩm" in data["answer"]
+    assert "500.000 ₫" in data["answer"]
+
+
+def test_chat_order_payment_and_refund_reads_require_lookup_ownership_and_live_sql(
+    auth_client: TestClient,
+    auth_session_factory,
+    chat_action_catalog: dict[str, str],
+) -> None:
+    order = _create_guest_order_for_chat_action(
+        auth_client,
+        chat_action_catalog["variant_id"],
+        idempotency_key="chat-read-order-create",
+        payment_method="online_demo",
+    )
+    lookup_token = order["guest_lookup_token"]
+    assert lookup_token is not None
+    auth_client.cookies.clear()
+
+    missing = auth_client.post(
+        "/api/v1/chat",
+        json={"message": f"Tra cứu đơn {order['order_code']}"},
+    )
+    wrong = auth_client.post(
+        "/api/v1/chat",
+        headers={"X-Order-Lookup-Token": "wrong-lookup-token-value"},
+        json={"message": f"Tra cứu đơn {order['order_code']}"},
+    )
+    assert missing.json()["data"]["status"] == "insufficient_data"
+    assert wrong.json()["data"]["status"] == "insufficient_data"
+
+    async def update_live_state() -> None:
+        async with auth_session_factory() as session:
+            persisted = await session.get(Order, UUID(order["id"]))
+            payment = await session.scalar(
+                select(PaymentAttempt).where(
+                    PaymentAttempt.order_id == UUID(order["id"])
+                )
+            )
+            assert persisted is not None and payment is not None
+            persisted.subtotal = 310_000
+            persisted.discount_amount = 0
+            persisted.shipping_fee = 30_000
+            persisted.total = 340_000
+            persisted.payment_status = "demo_approved"
+            payment.status = "demo_approved"
+            payment.amount = 340_000
+            session.add(
+                RefundRequest(
+                    order_id=persisted.id,
+                    requester_guest_token_hash=hash_token(lookup_token),
+                    reason_code="manufacturer_fault",
+                    amount=340_000,
+                    status="demo_reviewing",
+                )
+            )
+            await session.commit()
+
+    asyncio.run(update_live_state())
+    headers = {"X-Order-Lookup-Token": lookup_token}
+    order_read = auth_client.post(
+        "/api/v1/chat",
+        headers=headers,
+        json={"message": f"Tra cứu đơn {order['order_code']}"},
+    ).json()["data"]
+    payment_read = auth_client.post(
+        "/api/v1/chat",
+        headers=headers,
+        json={
+            "message": (
+                f"Thanh toán của đơn {order['order_code']} đang ở trạng thái nào?"
+            )
+        },
+    ).json()["data"]
+    refund_read = auth_client.post(
+        "/api/v1/chat",
+        headers=headers,
+        json={
+            "message": (
+                f"Yêu cầu hoàn tiền đơn {order['order_code']} đang xử lý tới đâu?"
+            )
+        },
+    ).json()["data"]
+
+    assert order_read["status"] == "ok"
+    assert "340.000 ₫" in order_read["answer"]
+    assert payment_read["status"] == "ok"
+    assert "340.000 ₫" in payment_read["answer"]
+    assert "mô phỏng" in payment_read["answer"].lower()
+    assert refund_read["status"] == "ok"
+    assert "340.000 ₫" in refund_read["answer"]
+    assert "mô phỏng" in refund_read["answer"].lower()
+
+
 def test_chat_cart_proposal_is_db_backed_and_has_no_side_effect(
     auth_client: TestClient,
     auth_session_factory,
