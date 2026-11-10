@@ -185,7 +185,7 @@ def test_chat_cart_proposal_is_db_backed_and_has_no_side_effect(
     response = auth_client.post(
         "/api/v1/chat",
         json={
-            "message": "Nội dung này không được dùng để tạo ID 999 hay giá 1 đồng",
+            "message": "Thêm sản phẩm đã chọn vào giỏ hàng",
             "action_context": {
                 "action": "cart_add",
                 "cart_id": cart["cart_id"],
@@ -227,7 +227,7 @@ def test_chat_cart_confirmation_consumes_once_and_replays_idempotently(
     proposal = auth_client.post(
         "/api/v1/chat",
         json={
-            "message": "Đề xuất",
+            "message": "Thêm sản phẩm đã chọn vào giỏ hàng",
             "action_context": {
                 "action": "cart_add",
                 "cart_id": cart["cart_id"],
@@ -284,7 +284,7 @@ def test_chat_confirmation_rejects_wrong_owner_and_expiry(
     proposal = auth_client.post(
         "/api/v1/chat",
         json={
-            "message": "Đề xuất",
+            "message": "Thêm sản phẩm đã chọn vào giỏ hàng",
             "action_context": {
                 "action": "cart_add",
                 "cart_id": cart["cart_id"],
@@ -343,7 +343,7 @@ def test_chat_cart_update_revalidates_version_before_confirmation(
     proposal = auth_client.post(
         "/api/v1/chat",
         json={
-            "message": "Đổi số lượng",
+            "message": "Đổi số lượng sản phẩm trong giỏ hàng",
             "action_context": {
                 "action": "cart_update",
                 "cart_id": cart["cart_id"],
@@ -387,7 +387,7 @@ def test_chat_cart_remove_calls_reviewed_cart_mutation(
     proposal = auth_client.post(
         "/api/v1/chat",
         json={
-            "message": "Xóa",
+            "message": "Xóa sản phẩm khỏi giỏ hàng",
             "action_context": {
                 "action": "cart_remove",
                 "cart_id": cart["cart_id"],
@@ -440,7 +440,10 @@ def test_chat_order_create_uses_server_totals_and_reviewed_order_service(
     }
     proposal = auth_client.post(
         "/api/v1/chat",
-        json={"message": "Tạo đơn, tổng chỉ 1 đồng", "action_context": action_context},
+        json={
+            "message": "Tạo đơn hàng, tổng chỉ 1 đồng",
+            "action_context": action_context,
+        },
     )
     assert proposal.status_code == 200, proposal.text
     assert auth_client.get("/api/v1/cart").json()["data"]["cart_id"] == cart["cart_id"]
@@ -497,7 +500,7 @@ def test_chat_order_create_uses_server_totals_and_reviewed_order_service(
     }
     second_proposal = auth_client.post(
         "/api/v1/chat",
-        json={"message": "Đề xuất thứ hai", "action_context": second_context},
+        json={"message": "Tạo đơn hàng thứ hai", "action_context": second_context},
     ).json()["data"]["proposed_action"]
     cross_key = "chat-order-cross-endpoint-001"
     direct_consumption = auth_client.post(
@@ -578,7 +581,7 @@ def test_chat_order_cancel_uses_exact_owned_order_id(
     proposal = auth_client.post(
         "/api/v1/chat",
         json={
-            "message": "Hủy ID giả 00000000-0000-0000-0000-000000000000",
+            "message": "Hủy đơn ID giả 00000000-0000-0000-0000-000000000000",
             "action_context": {
                 "action": "order_cancel",
                 "order_id": order_response["id"],
@@ -1042,7 +1045,7 @@ def test_chat_refund_confirmation_binds_idempotency_key_before_mutation_attempt(
         "/api/v1/chat",
         headers=lookup_headers,
         json={
-            "message": "Yêu cầu hoàn tiền",
+            "message": "Tạo yêu cầu hoàn tiền",
             "action_context": {
                 "action": "refund_request",
                 "order_id": order["id"],
@@ -1155,7 +1158,7 @@ def test_chat_refund_request_uses_server_order_amount(
     proposal = auth_client.post(
         "/api/v1/chat",
         json={
-            "message": "Hoàn 999999999 đồng",
+            "message": "Tạo yêu cầu hoàn tiền 999999999 đồng",
             "action_context": {
                 "action": "refund_request",
                 "order_id": created["id"],
@@ -1221,7 +1224,7 @@ def test_chat_guest_lookup_can_propose_and_confirm_refund_without_cart_cookie(
         "/api/v1/chat",
         headers=lookup_headers,
         json={
-            "message": "Yêu cầu hoàn tiền",
+            "message": "Tạo yêu cầu hoàn tiền",
             "action_context": {
                 "action": "refund_request",
                 "order_id": order["id"],

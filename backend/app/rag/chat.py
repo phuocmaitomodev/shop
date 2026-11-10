@@ -47,6 +47,9 @@ ChatIntent = Literal[
     "out_of_scope",
     "prompt_injection",
 ]
+ChatOperation = Literal[
+    "rag_read", "sql_read", "mutation_proposal", "greeting", "reject"
+]
 MAX_CHAT_PRODUCTS = 5
 MAX_PRICE_VND = 2_147_483_647
 _ALLOWED_POLICY_FACTS = tuple(
@@ -78,6 +81,12 @@ class ChatPlan:
     query: str
     filters: ProductRetrievalFilters
     intent: ChatIntent = "product_search"
+
+
+@dataclass(frozen=True)
+class ChatRoute:
+    intent: ChatIntent
+    operation: ChatOperation
 
 
 @dataclass(frozen=True)
@@ -550,6 +559,32 @@ _GREETING = re.compile(
     r"(?:(?:bạn\s+)?(?:hỗ\s+trợ|làm)\s+được\s+gì\??)?$",
     re.I,
 )
+_MUTATION_INTENTS: tuple[tuple[ChatIntent, re.Pattern[str]], ...] = (
+    ("refund_request", _REFUND_REQUEST),
+    ("order_cancel", _ORDER_CANCEL),
+    ("order_create", _ORDER_CREATE),
+    ("cart_remove", _CART_REMOVE),
+    ("cart_update", _CART_UPDATE),
+    ("cart_add", _CART_ADD),
+)
+_ROUTE_OPERATIONS: dict[ChatIntent, ChatOperation] = {
+    "policy_question": "rag_read",
+    "product_search": "rag_read",
+    "product_compare": "rag_read",
+    "cart_read": "sql_read",
+    "order_lookup": "sql_read",
+    "payment_demo_status": "sql_read",
+    "refund_status": "sql_read",
+    "cart_add": "mutation_proposal",
+    "cart_update": "mutation_proposal",
+    "cart_remove": "mutation_proposal",
+    "order_create": "mutation_proposal",
+    "order_cancel": "mutation_proposal",
+    "refund_request": "mutation_proposal",
+    "greeting": "greeting",
+    "out_of_scope": "reject",
+    "prompt_injection": "reject",
+}
 _ORDER_STATUS_LABELS: dict[OrderStatus, str] = {
     "pending_confirmation": "chờ xác nhận",
     "confirmed": "đã xác nhận",
@@ -1169,6 +1204,21 @@ def _deterministic_intent(
     return "out_of_scope"
 
 
+def _route_message(
+    message: str, history: Sequence[ChatHistoryTurn]
+) -> ChatRoute | None:
+    """Return one closed route, or None when prose names multiple mutations."""
+
+    normalized = message.strip().lower()
+    mutation_intents = {
+        intent for intent, pattern in _MUTATION_INTENTS if pattern.search(normalized)
+    }
+    if len(mutation_intents) > 1:
+        return None
+    intent = _deterministic_intent(message, history)
+    return ChatRoute(intent=intent, operation=_ROUTE_OPERATIONS[intent])
+
+
 def _policy_retrieval_query(
     message: str, history: Sequence[ChatHistoryTurn]
 ) -> str:
@@ -1301,6 +1351,10 @@ async def orchestrate_chat(
     idempotency_key: str | None = None,
     client_message_id: UUID | None = None,
 ) -> ChatResult:
+    # The entry guard precedes confirmation, proposal, provider, retrieval, and SQL.
+    # Message and every client-supplied history role are untrusted data.
+    if _is_injection(" ".join([turn.content for turn in history] + [message])):
+        return _fallback("out_of_scope")
     if confirmation_token is not None:
         if (
             action_adapter is None
@@ -1325,7 +1379,15 @@ async def orchestrate_chat(
             sources=[],
             status="ok",
         )
+    route = _route_message(message, history)
+    if route is None:
+        return _fallback("insufficient_data")
     if action_context is not None:
+        if (
+            route.operation != "mutation_proposal"
+            or route.intent != action_context.action
+        ):
+            return _fallback("insufficient_data")
         if action_adapter is None:
             return _fallback("provider_unavailable")
         try:
@@ -1344,19 +1406,12 @@ async def orchestrate_chat(
             status="ok",
             proposed_action=proposal,
         )
-    intent = _deterministic_intent(message, history)
-    if intent in {"out_of_scope", "prompt_injection"}:
+    intent = route.intent
+    if route.operation == "reject":
         return _fallback("out_of_scope")
-    if intent in {
-        "cart_add",
-        "cart_update",
-        "cart_remove",
-        "order_create",
-        "order_cancel",
-        "refund_request",
-    }:
-        return _fallback("out_of_scope")
-    if intent == "greeting":
+    if route.operation == "mutation_proposal":
+        return _fallback("insufficient_data")
+    if route.operation == "greeting":
         return ChatResult(
             answer=(
                 "Xin chào! Mình có thể hỗ trợ chính sách, tìm hoặc so sánh sản phẩm, "
