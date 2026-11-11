@@ -100,6 +100,53 @@ def test_anonymous_empty_cart_read_bootstraps_stable_id_without_persisting_cart(
     assert asyncio.run(count_carts()) == 0
 
 
+def test_expired_guest_cart_is_abandoned_before_bootstrap_materialization(
+    cart_client: TestClient, auth_session_factory, cart_catalog
+) -> None:
+    bootstrap = cart_client.get("/api/v1/cart")
+    bootstrap_id = UUID(bootstrap.json()["data"]["cart_id"])
+    guest_token = cart_client.cookies["shop_guest"]
+
+    async def seed_expired_cart() -> None:
+        now = datetime.now(timezone.utc)
+        async with auth_session_factory() as session:
+            session.add(
+                Cart(
+                    id=bootstrap_id,
+                    guest_token_hash=hash_token(guest_token),
+                    guest_expires_at=now - timedelta(days=1),
+                    created_at=now - timedelta(days=2),
+                    updated_at=now - timedelta(days=2),
+                    items=[],
+                )
+            )
+            await session.commit()
+
+    asyncio.run(seed_expired_cart())
+    response = cart_client.post(
+        "/api/v1/cart/items",
+        json={"variant_id": cart_catalog["variant_id"], "quantity": 1},
+    )
+
+    assert response.status_code == 201, response.text
+    materialized_id = UUID(response.json()["data"]["cart_id"])
+    assert materialized_id != bootstrap_id
+
+    async def cart_states():
+        async with auth_session_factory() as session:
+            rows = await session.execute(
+                select(Cart.id, Cart.status).where(
+                    Cart.guest_token_hash == hash_token(guest_token)
+                )
+            )
+            return list(rows.tuples())
+
+    assert sorted(asyncio.run(cart_states()), key=lambda row: row[1]) == [
+        (bootstrap_id, "abandoned"),
+        (materialized_id, "active"),
+    ]
+
+
 def test_guest_adds_live_variant_with_server_calculated_totals(
     cart_client: TestClient, auth_session_factory, cart_catalog
 ) -> None:

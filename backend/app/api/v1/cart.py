@@ -82,6 +82,25 @@ async def _lock_guest_cart_bootstrap(
     await session.execute(select(func.pg_advisory_xact_lock(lock_key)))
 
 
+async def _abandon_expired_guest_cart(
+    session: AsyncSession, guest_token: str | None
+) -> None:
+    if guest_token is None:
+        return
+    expired_cart = await session.scalar(
+        select(Cart)
+        .where(
+            Cart.guest_token_hash == hash_token(guest_token),
+            Cart.guest_expires_at <= datetime.now(timezone.utc),
+            Cart.status == "active",
+        )
+        .with_for_update()
+    )
+    if expired_cart is not None:
+        expired_cart.status = "abandoned"
+        await session.flush()
+
+
 async def _resolve_owner(request: Request, session: AsyncSession) -> CartOwner:
     settings = get_settings()
     auth_token = request.cookies.get(settings.auth_cookie_name)
@@ -173,6 +192,7 @@ async def _get_or_create_cart(
         )
     else:
         await _lock_guest_cart_bootstrap(session, owner.guest_token)
+        await _abandon_expired_guest_cart(session, owner.guest_token)
         cart = await _find_cart(session, owner, lock=True)
         if cart is not None:
             return cart

@@ -7,7 +7,9 @@ from fastapi.testclient import TestClient
 from pydantic import ValidationError
 from sqlalchemy import func, select
 
+from app.api.v1 import cart as cart_api
 from app.api.v1 import chat as chat_api
+from app.commerce import chat_actions as chat_actions_api
 from app.core.config import Settings, get_settings
 from app.core.middleware import ChatBodyLimitMiddleware
 from app.core.security import hash_token
@@ -385,6 +387,56 @@ def test_chat_cart_add_bootstraps_empty_guest_cart_only_after_confirmation(
     assert cart["cart_id"] == cart_id
     assert cart["item_count"] == 1
     assert asyncio.run(count_carts()) == 1
+
+
+def test_chat_empty_cart_confirmation_locks_owner_before_variant(
+    auth_client: TestClient,
+    chat_action_catalog: dict[str, str],
+    monkeypatch,
+) -> None:
+    lock_order = []
+    original_owner_lock = cart_api._lock_guest_cart_bootstrap
+    original_variant_lock = chat_actions_api._load_sellable_variant
+
+    async def record_owner_lock(session, guest_token):
+        await original_owner_lock(session, guest_token)
+        lock_order.append("owner")
+
+    async def record_variant_lock(session, variant_id):
+        variant = await original_variant_lock(session, variant_id)
+        lock_order.append("variant")
+        return variant
+
+    monkeypatch.setattr(cart_api, "_lock_guest_cart_bootstrap", record_owner_lock)
+    monkeypatch.setattr(chat_actions_api, "_load_sellable_variant", record_variant_lock)
+
+    cart_id = auth_client.get("/api/v1/cart").json()["data"]["cart_id"]
+    proposal = auth_client.post(
+        "/api/v1/chat",
+        json={
+            "message": "Thêm sản phẩm đã chọn vào giỏ hàng",
+            "action_context": {
+                "action": "cart_add",
+                "cart_id": cart_id,
+                "variant_id": chat_action_catalog["variant_id"],
+                "quantity": 1,
+            },
+        },
+    ).json()["data"]["proposed_action"]
+    lock_order.clear()
+
+    confirmed = auth_client.post(
+        "/api/v1/chat",
+        headers={"Idempotency-Key": "bootstrap-lock-order-0001"},
+        json={
+            "message": "Xác nhận",
+            "confirmation_token": proposal["confirmation_token"],
+            "client_message_id": "00000000-0000-0000-0000-000000000096",
+        },
+    )
+
+    assert confirmed.status_code == 200, confirmed.text
+    assert lock_order == ["owner", "variant"]
 
 
 def test_chat_cart_confirmation_consumes_once_and_replays_idempotently(

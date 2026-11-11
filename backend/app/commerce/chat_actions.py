@@ -11,6 +11,7 @@ from app.api.v1.cart import (
     _available_bootstrap_cart_id,
     _effective_price,
     _find_cart,
+    _get_or_create_cart,
     _load_sellable_variant,
     _owned_item,
     _require_cart_version,
@@ -487,13 +488,10 @@ class DatabaseChatActionAdapter:
 
         if confirmation.action == "cart_add":
             context = CartAddActionContext.model_validate(confirmation.payload_json)
-            current_cart = await _find_cart(self._session, owner, lock=True)
-            expected_cart_id = (
-                current_cart.id
-                if current_cart is not None
-                else await _available_bootstrap_cart_id(self._session, owner)
+            current_cart = await _get_or_create_cart(
+                self._session, owner, Response()
             )
-            if expected_cart_id != context.cart_id:
+            if current_cart.id != context.cart_id:
                 raise self._invalid_confirmation()
             variant = await _load_sellable_variant(self._session, context.variant_id)
             existing_item = next(

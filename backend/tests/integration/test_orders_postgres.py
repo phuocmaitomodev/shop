@@ -759,7 +759,7 @@ def test_postgres_order_mutations_fail_closed_at_adversarial_boundaries(
     asyncio.run(api_engine.dispose())
 
 
-def test_postgres_chat_confirmation_concurrent_consume_is_idempotent() -> None:
+def test_postgres_chat_empty_cart_concurrency_and_idempotent_replay() -> None:
     assert MIGRATION_DATABASE_URL is not None
     require_fresh_migrated_database(MIGRATION_DATABASE_URL)
 
@@ -823,9 +823,11 @@ def test_postgres_chat_confirmation_concurrent_consume_is_idempotent() -> None:
             )
         assert first.get("/api/v1/cart").json()["data"]["items"] == []
         second.cookies.set("shop_guest", first.cookies["shop_guest"])
+        first_barrier = Barrier(2)
 
         def confirm(args: tuple[TestClient, str, int]) -> tuple[int, str, dict]:
             client, token, suffix = args
+            first_barrier.wait(timeout=5)
             response = client.post(
                 "/api/v1/chat",
                 json={
@@ -848,8 +850,46 @@ def test_postgres_chat_confirmation_concurrent_consume_is_idempotent() -> None:
                 )
             )
 
+        replay_proposal = first.post(
+            "/api/v1/chat",
+            json={
+                "message": "Thêm lại sản phẩm đã chọn vào giỏ hàng",
+                "action_context": {
+                    "action": "cart_add",
+                    "cart_id": cart["cart_id"],
+                    "variant_id": variant_id,
+                    "quantity": 1,
+                },
+            },
+        )
+        assert replay_proposal.status_code == 200, replay_proposal.text
+        replay_token = replay_proposal.json()["data"]["proposed_action"][
+            "confirmation_token"
+        ]
+        replay_body = {
+            "message": "Xác nhận",
+            "confirmation_token": replay_token,
+            "client_message_id": "00000000-0000-0000-0000-000000000093",
+        }
+        replay_headers = {"Idempotency-Key": "postgres-chat-cart-add-93"}
+        replay_barrier = Barrier(2)
+
+        def replay(client: TestClient) -> tuple[int, str, dict]:
+            replay_barrier.wait(timeout=5)
+            response = client.post(
+                "/api/v1/chat", json=replay_body, headers=replay_headers
+            )
+            data = response.json()["data"]
+            return response.status_code, data["answer"], data["action_result"]
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            replay_outcomes = list(executor.map(replay, (first, second)))
+
     assert [status_code for status_code, _, _ in outcomes] == [200, 200]
     assert outcomes[0][2] is outcomes[1][2] is None
+    assert [status_code for status_code, _, _ in replay_outcomes] == [200, 200]
+    assert replay_outcomes[0][1] == replay_outcomes[1][1]
+    assert replay_outcomes[0][2] is replay_outcomes[1][2] is None
 
     async def persisted_state() -> tuple[int, int, int]:
         async with api_session_factory() as session:
@@ -860,7 +900,7 @@ def test_postgres_chat_confirmation_concurrent_consume_is_idempotent() -> None:
             consumed = await session.scalar(
                 select(func.count()).select_from(ActionConfirmation).where(
                     ActionConfirmation.token_hash.in_(
-                        [hash_token(token) for token in proposals]
+                        [hash_token(token) for token in [*proposals, replay_token]]
                     ),
                     ActionConfirmation.consumed_at.is_not(None),
                 )
@@ -873,7 +913,7 @@ def test_postgres_chat_confirmation_concurrent_consume_is_idempotent() -> None:
             )
             return int(quantity or 0), int(consumed or 0), int(records or 0)
 
-    assert asyncio.run(persisted_state()) == (2, 2, 2)
+    assert asyncio.run(persisted_state()) == (3, 3, 3)
     application.dependency_overrides.clear()
     asyncio.run(api_engine.dispose())
 
