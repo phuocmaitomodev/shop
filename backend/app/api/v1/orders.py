@@ -432,6 +432,42 @@ async def _load_order(session: AsyncSession, order_id: UUID) -> Order:
     return order
 
 
+async def _idempotent_order_response(
+    session: AsyncSession,
+    response_body: dict,
+    *,
+    legacy_order_create: bool = False,
+    legacy_order_cancel: bool = False,
+) -> OrderResponse:
+    snapshot = response_body.get("order")
+    if snapshot is not None:
+        return OrderResponse.model_validate(snapshot)
+    order = await _load_order(session, UUID(response_body["order_id"]))
+    response = await _order_response(session, order, expose_guest_token=False)
+    if legacy_order_cancel:
+        return response.model_copy(
+            update={
+                "status": "cancelled",
+                "payment": response.payment.model_copy(
+                    update={"status": "cancelled"}
+                ),
+            }
+        )
+    if not legacy_order_create:
+        return response
+    initial_payment_status = (
+        "cod_due" if response.payment.method == "cod" else "demo_processing"
+    )
+    return response.model_copy(
+        update={
+            "status": "pending_confirmation",
+            "payment": response.payment.model_copy(
+                update={"status": initial_payment_status}
+            ),
+        }
+    )
+
+
 async def _existing_idempotency(
     session: AsyncSession,
     owner: CartOwner,
@@ -521,10 +557,11 @@ async def create_order(
                 message="Idempotency-Key đã được dùng cho dữ liệu khác.",
             )
         if existing.status == "completed" and existing.response_body:
-            order = await _load_order(session, UUID(existing.response_body["order_id"]))
             return {
-                "data": await _order_response(
-                    session, order, expose_guest_token=False
+                "data": await _idempotent_order_response(
+                    session,
+                    existing.response_body,
+                    legacy_order_create=True,
                 ),
                 "meta": {"request_id": request.state.request_id},
             }
@@ -544,9 +581,12 @@ async def create_order(
             and existing.status == "completed"
             and existing.response_body
         ):
-            order = await _load_order(session, UUID(existing.response_body["order_id"]))
             return {
-                "data": await _order_response(session, order, expose_guest_token=False),
+                "data": await _idempotent_order_response(
+                    session,
+                    existing.response_body,
+                    legacy_order_create=True,
+                ),
                 "meta": {"request_id": request.state.request_id},
             }
     if cart is None or cart.id != payload.cart_id or not cart.items:
@@ -750,6 +790,15 @@ async def create_order(
             )
         )
     cart.status = "converted"
+    await session.flush()
+    order = await _load_order(session, order.id)
+    initial_response = await _order_response(
+        session,
+        order,
+        expose_guest_token=True,
+        issued_guest_token=lookup_token,
+    )
+    replay_response = initial_response.model_copy(update={"guest_lookup_token": None})
     record = IdempotencyRecord(
         owner_user_id=owner.user_id,
         owner_guest_token_hash=_owner_guest_hash(owner),
@@ -758,21 +807,15 @@ async def create_order(
         key_hash=key_hash,
         request_hash=request_hash,
         status="completed",
-        response_body={"order_id": str(order.id)},
+        response_body={"order": replay_response.model_dump(mode="json")},
         response_status=status.HTTP_201_CREATED,
         expires_at=datetime.now(timezone.utc)
         + timedelta(hours=settings.idempotency_ttl_hours),
     )
     session.add(record)
     await session.commit()
-    order = await _load_order(session, order.id)
     return {
-        "data": await _order_response(
-            session,
-            order,
-            expose_guest_token=True,
-            issued_guest_token=lookup_token,
-        ),
+        "data": initial_response,
         "meta": {"request_id": request.state.request_id},
     }
 
@@ -917,9 +960,12 @@ async def cancel_order(
                 message="Idempotency-Key đã được dùng cho dữ liệu khác.",
             )
         if existing.status == "completed" and existing.response_body:
-            order = await _load_order(session, UUID(existing.response_body["order_id"]))
             return {
-                "data": await _order_response(session, order, expose_guest_token=False),
+                "data": await _idempotent_order_response(
+                    session,
+                    existing.response_body,
+                    legacy_order_cancel=True,
+                ),
                 "meta": {"request_id": request.state.request_id},
             }
 
@@ -951,12 +997,11 @@ async def cancel_order(
                 message="Idempotency-Key đã được dùng cho dữ liệu khác.",
             )
         if existing.status == "completed" and existing.response_body:
-            replay_order = await _load_order(
-                session, UUID(existing.response_body["order_id"])
-            )
             return {
-                "data": await _order_response(
-                    session, replay_order, expose_guest_token=False
+                "data": await _idempotent_order_response(
+                    session,
+                    existing.response_body,
+                    legacy_order_cancel=True,
                 ),
                 "meta": {"request_id": request.state.request_id},
             }
@@ -1008,6 +1053,8 @@ async def cancel_order(
     )
     if payment is not None:
         payment.status = "cancelled"
+    await session.flush()
+    order_response = await _order_response(session, order, expose_guest_token=False)
     settings = get_settings()
     session.add(
         IdempotencyRecord(
@@ -1018,16 +1065,15 @@ async def cancel_order(
             key_hash=key_hash,
             request_hash=request_hash,
             status="completed",
-            response_body={"order_id": str(order.id)},
+            response_body={"order": order_response.model_dump(mode="json")},
             response_status=status.HTTP_200_OK,
             expires_at=datetime.now(timezone.utc)
             + timedelta(hours=settings.idempotency_ttl_hours),
         )
     )
     await session.commit()
-    order = await _load_order(session, order.id)
     return {
-        "data": await _order_response(session, order, expose_guest_token=False),
+        "data": order_response,
         "meta": {"request_id": request.state.request_id},
     }
 
@@ -1041,6 +1087,20 @@ def _refund_response(refund: RefundRequest, order_code: str) -> RefundResponse:
         amount=refund.amount,
         status=refund.status,
         created_at=refund.created_at,
+    )
+
+
+async def _idempotent_refund_response(
+    session: AsyncSession, response_body: dict, order_code: str
+) -> RefundResponse:
+    snapshot = response_body.get("refund")
+    if snapshot is not None:
+        return RefundResponse.model_validate(snapshot)
+    refund = await session.get(RefundRequest, UUID(response_body["refund_id"]))
+    if refund is None:
+        raise RuntimeError("refund request disappeared")
+    return _refund_response(refund, order_code).model_copy(
+        update={"status": "requested"}
     )
 
 
@@ -1086,11 +1146,10 @@ async def create_refund_request(
                 message="Idempotency-Key đã được dùng cho dữ liệu khác.",
             )
         if existing.status == "completed" and existing.response_body:
-            refund = await session.get(RefundRequest, UUID(existing.response_body["refund_id"]))
-            if refund is None:
-                raise RuntimeError("refund request disappeared")
             return {
-                "data": _refund_response(refund, order_code),
+                "data": await _idempotent_refund_response(
+                    session, existing.response_body, order_code
+                ),
                 "meta": {"request_id": request.state.request_id},
             }
 
@@ -1122,13 +1181,10 @@ async def create_refund_request(
                 message="Idempotency-Key đã được dùng cho dữ liệu khác.",
             )
         if existing.status == "completed" and existing.response_body:
-            replay_refund = await session.get(
-                RefundRequest, UUID(existing.response_body["refund_id"])
-            )
-            if replay_refund is None:
-                raise RuntimeError("refund request disappeared")
             return {
-                "data": _refund_response(replay_refund, order_code),
+                "data": await _idempotent_refund_response(
+                    session, existing.response_body, order_code
+                ),
                 "meta": {"request_id": request.state.request_id},
             }
     if order.status != "completed" or order.payment_status not in {"paid_demo", "demo_approved"}:
@@ -1169,6 +1225,7 @@ async def create_refund_request(
     )
     session.add(refund)
     await session.flush()
+    refund_response = _refund_response(refund, order_code)
     settings = get_settings()
     session.add(
         IdempotencyRecord(
@@ -1179,15 +1236,14 @@ async def create_refund_request(
             key_hash=key_hash,
             request_hash=request_hash,
             status="completed",
-            response_body={"refund_id": str(refund.id)},
+            response_body={"refund": refund_response.model_dump(mode="json")},
             response_status=status.HTTP_201_CREATED,
             expires_at=datetime.now(timezone.utc) + timedelta(hours=settings.idempotency_ttl_hours),
         )
     )
     await session.commit()
-    await session.refresh(refund)
     return {
-        "data": _refund_response(refund, order_code),
+        "data": refund_response,
         "meta": {"request_id": request.state.request_id},
     }
 

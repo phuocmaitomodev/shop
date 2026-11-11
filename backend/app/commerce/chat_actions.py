@@ -55,7 +55,9 @@ from app.schemas.orders import (
     OrderCancelRequest,
     OrderConfirmationPayload,
     OrderCreateRequest,
+    OrderResponse,
     RefundCreateRequest,
+    RefundResponse,
 )
 
 
@@ -74,6 +76,7 @@ class ChatActionExecution:
     action: str
     resource_code: str
     summary: str
+    result: OrderResponse | RefundResponse | None
 
 
 class DatabaseChatActionAdapter:
@@ -370,6 +373,7 @@ class DatabaseChatActionAdapter:
                         action=confirmation.action,
                         resource_code=confirmation.resource_key,
                         summary=existing.response_body["summary"],
+                        result=None,
                     )
 
         now = datetime.now(timezone.utc)
@@ -415,6 +419,7 @@ class DatabaseChatActionAdapter:
                 summary=f"Đã tạo đơn {order.order_code} ({order.total:,} VND).".replace(
                     ",", "."
                 ),
+                result=order,
             )
         if confirmation.action == "order_cancel":
             context = OrderCancelActionContext.model_validate(
@@ -435,6 +440,7 @@ class DatabaseChatActionAdapter:
                 action=confirmation.action,
                 resource_code=order.order_code,
                 summary=f"Đã hủy đơn {order.order_code}.",
+                result=order,
             )
         if confirmation.action == "refund_request":
             context = RefundRequestActionContext.model_validate(
@@ -459,6 +465,7 @@ class DatabaseChatActionAdapter:
                     f"Đã tạo yêu cầu hoàn tiền mô phỏng "
                     f"{refund.amount:,} VND cho đơn {refund.order_code}."
                 ).replace(",", "."),
+                result=refund,
             )
         if confirmation.action not in {"cart_add", "cart_update", "cart_remove"}:
             raise AppError(
@@ -551,6 +558,7 @@ class DatabaseChatActionAdapter:
             action=confirmation.action,
             resource_code=confirmation.resource_key,
             summary=summary,
+            result=None,
         )
 
     async def _bind_confirmation_attempt(

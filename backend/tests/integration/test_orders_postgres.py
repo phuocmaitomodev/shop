@@ -104,15 +104,26 @@ def test_postgres_concurrent_cancel_restores_stock_once() -> None:
         checkout_payload["confirmation_token"] = issue_confirmation(
             first, "order_create", cart["cart_id"], checkout_payload
         )
-        created = first.post(
-            "/api/v1/orders",
-            headers={"Idempotency-Key": "postgres-checkout-cancel"},
-            json=checkout_payload,
-        )
-        assert created.status_code == 201, created.text
-        order = created.json()["data"]
-
         second.cookies.set("shop_guest", first.cookies["shop_guest"])
+
+        def create(client: TestClient) -> tuple[int, dict]:
+            response = client.post(
+                "/api/v1/orders",
+                headers={"Idempotency-Key": "postgres-checkout-cancel"},
+                json=checkout_payload,
+            )
+            return response.status_code, response.json()["data"]
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            create_outcomes = list(executor.map(create, (first, second)))
+
+        assert [status_code for status_code, _ in create_outcomes] == [201, 201]
+        assert len({result["id"] for _, result in create_outcomes}) == 1
+        assert sum(bool(result["guest_lookup_token"]) for _, result in create_outcomes) == 1
+        order = next(
+            result for _, result in create_outcomes if result["guest_lookup_token"]
+        )
+
         cancel_payload = {"reason": "Khách đổi ý"}
         first_token = issue_confirmation(
             first, "order_cancel", order["order_code"], cancel_payload
@@ -817,15 +828,17 @@ def test_postgres_chat_confirmation_concurrent_consume_is_idempotent() -> None:
         }
         headers = {"Idempotency-Key": "postgres-chat-cart-add"}
 
-        def confirm(client: TestClient) -> tuple[int, str]:
+        def confirm(client: TestClient) -> tuple[int, str, dict]:
             response = client.post("/api/v1/chat", json=body, headers=headers)
-            return response.status_code, response.json()["data"]["answer"]
+            data = response.json()["data"]
+            return response.status_code, data["answer"], data["action_result"]
 
         with ThreadPoolExecutor(max_workers=2) as executor:
             outcomes = list(executor.map(confirm, (first, second)))
 
-    assert [status_code for status_code, _ in outcomes] == [200, 200]
+    assert [status_code for status_code, _, _ in outcomes] == [200, 200]
     assert outcomes[0][1] == outcomes[1][1]
+    assert outcomes[0][2] is outcomes[1][2] is None
 
     async def persisted_state() -> tuple[int, int, int]:
         async with api_session_factory() as session:

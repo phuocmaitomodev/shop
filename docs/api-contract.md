@@ -192,6 +192,24 @@ gửi `confirmation_token` server-issued cùng `client_message_id` UUID, không 
 dưới dạng hash, gắn owner/session/action/resource/payload tối đa 5 phút và chỉ consume
 nguyên tử một lần; retry cùng key/payload trả lại kết quả cũ, còn key xung đột payload
 trả `IDEMPOTENCY_KEY_REUSED`.
+
+Response có thêm `action_result` nullable. Field này chỉ khác `null` khi lượt xác nhận
+mutation thành công và là discriminated union do server tạo, keyed bởi `action`:
+
+- `order_create|order_cancel`: `{ "action": "...", "order": OrderResponse }`;
+- `refund_request`: `{ "action": "refund_request", "refund": RefundResponse }`.
+
+Các cart mutation vẫn trả `action_result: null`; snapshot cart authoritative tiếp tục được
+lấy qua `GET /api/v1/cart` cho đến khi có thể lưu snapshot và mutation trong cùng một
+transaction idempotency.
+
+Đây là resource authoritative sau commit; client dùng ID/code/version/status từ object
+typed này, không parse `answer` hay reuse `proposed_action.resource_code`. Chỉ
+`order_create` của guest được phép chứa `order.guest_lookup_token`, đúng một lần ở
+response mutation đầu tiên; exact retry giữ cùng order snapshot nhưng trả
+`guest_lookup_token=null`. Cart, cancel và refund result không expose lookup credential
+hoặc secret không liên quan. Proposal, read, greeting, reject và lỗi luôn trả
+`action_result=null`.
 Guest đã mất/hết hạn cookie cart gửi `X-Order-Lookup-Token` (20–200 ký tự) trong cả
 lượt đề xuất và xác nhận `order_cancel`/`refund_request`; session authenticated luôn
 có ưu tiên và lookup token không được vượt ownership của user khác.
@@ -222,8 +240,9 @@ Error code public cho confirmation/ownership:
 | 409 | `CONFIRMATION_PAYLOAD_CHANGED` | Payload normalized không còn khớp |
 | 409 | `IDEMPOTENCY_KEY_REUSED` | Cùng key nhưng binding/request hash khác |
 
-Exact retry cùng owner/payload/`client_message_id`/key trả response snapshot cũ; retry
-khác một thành phần phải fail closed. Business revalidation giữ các mã
+Exact retry cùng owner/payload/`client_message_id`/key trả business response snapshot
+cũ, ngoại trừ one-time guest lookup credential không được phát lại; retry khác một
+thành phần phải fail closed. Business revalidation giữ các mã
 `CART_VERSION_CONFLICT`, `PRICE_CHANGED`, `OUT_OF_STOCK`,
 `ORDER_STATUS_NOT_CANCELLABLE`, `REFUND_NOT_ELIGIBLE` và mã coupon ở mục 4.
 

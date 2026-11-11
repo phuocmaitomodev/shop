@@ -4,6 +4,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from app.schemas.orders import OrderResponse, RefundResponse
+
 
 class ChatHistoryRequest(BaseModel):
     role: Literal["user", "assistant"]
@@ -161,6 +163,33 @@ class ProposedActionResponse(BaseModel):
     expires_at: datetime
 
 
+class StrictActionResult(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+
+class OrderCreateActionResult(StrictActionResult):
+    action: Literal["order_create"]
+    order: OrderResponse
+
+
+class OrderCancelActionResult(StrictActionResult):
+    action: Literal["order_cancel"]
+    order: OrderResponse
+
+
+class RefundRequestActionResult(StrictActionResult):
+    action: Literal["refund_request"]
+    refund: RefundResponse
+
+
+ChatActionResult = Annotated[
+    OrderCreateActionResult
+    | OrderCancelActionResult
+    | RefundRequestActionResult,
+    Field(discriminator="action"),
+]
+
+
 class ChatResponse(BaseModel):
     answer: str
     products: list[ChatProductResponse]
@@ -169,6 +198,7 @@ class ChatResponse(BaseModel):
         "ok", "insufficient_data", "out_of_scope", "provider_unavailable"
     ]
     proposed_action: ProposedActionResponse | None = None
+    action_result: ChatActionResult | None = None
 
 
 class ChatEnvelope(BaseModel):

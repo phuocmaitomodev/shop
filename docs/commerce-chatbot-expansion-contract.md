@@ -162,7 +162,8 @@ Các shape được phép:
 Không shape nào nhận `amount`, totals, price, stock, status, SQL, endpoint hay tool
 name. Server hydrate/tính các field đó từ PostgreSQL. Unknown field/action bị reject;
 ID từ text/model không được copy vào `action_context`. Response có `answer`,
-`products`, `sources`, `status` và additive `proposed_action` nullable:
+`products`, `sources`, `status`, additive `proposed_action` nullable và additive
+`action_result` nullable:
 
 ```json
 {
@@ -176,6 +177,16 @@ ID từ text/model không được copy vào `action_context`. Response có `ans
   }
 }
 ```
+
+`action_result` chỉ xuất hiện sau successful confirmation và là strict server-produced
+discriminated union: order create/cancel trả `{action, order: OrderResponse}`, refund
+request trả `{action, refund: RefundResponse}`. Frontend phải dùng resource
+authoritative này thay vì parse ID/credential từ `answer` hoặc proposal. Chỉ guest
+`order_create` được trả `order.guest_lookup_token` một lần; exact retry trả cùng order
+nhưng token `null`. Không action nào khác được expose lookup credential/secret.
+Proposal, read, reject, error và cart mutation có `action_result=null`; client lấy
+authoritative cart snapshot qua `GET /api/v1/cart` cho đến khi cart mutation và replay
+snapshot có thể được lưu atomically trong cùng transaction idempotency.
 
 `confirmation_token` chỉ được production DB-backed ownership/action adapter phát sau
 authorization, ownership check và read validation của typed `action_context`; token

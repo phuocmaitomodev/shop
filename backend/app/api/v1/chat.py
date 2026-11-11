@@ -9,7 +9,7 @@ from app.core.config import Settings, get_settings
 from app.core.errors import AppError
 from app.core.rate_limit import InMemoryRateLimiter
 from app.core.security import hash_token
-from app.commerce.chat_actions import DatabaseChatActionAdapter
+from app.commerce.chat_actions import ChatActionExecution, DatabaseChatActionAdapter
 from app.db.session import get_db_session
 from app.models.auth import AuthSession, User
 from app.rag.chat import (
@@ -22,11 +22,42 @@ from app.rag.chat import (
 )
 from app.rag.provider import DeterministicEmbeddingProvider, GeminiEmbeddingProvider
 from app.rag.commerce_reads import DatabaseCommerceReadRepository
-from app.schemas.chat import ChatEnvelope, ChatRequest, ChatResponse
+from app.schemas.chat import (
+    ChatActionResult,
+    ChatEnvelope,
+    ChatRequest,
+    ChatResponse,
+    OrderCancelActionResult,
+    OrderCreateActionResult,
+    RefundRequestActionResult,
+)
 from app.schemas.common import ErrorEnvelope
+from app.schemas.orders import OrderResponse, RefundResponse
 
 
 router = APIRouter(tags=["chat"])
+
+
+def _action_result(
+    execution: ChatActionExecution | None,
+) -> ChatActionResult | None:
+    if execution is None or execution.result is None:
+        return None
+    if execution.action == "order_create":
+        if not isinstance(execution.result, OrderResponse):
+            raise TypeError("order create returned an invalid authoritative result")
+        return OrderCreateActionResult(action="order_create", order=execution.result)
+    if execution.action == "order_cancel":
+        if not isinstance(execution.result, OrderResponse):
+            raise TypeError("order cancel returned an invalid authoritative result")
+        return OrderCancelActionResult(action="order_cancel", order=execution.result)
+    if execution.action == "refund_request":
+        if not isinstance(execution.result, RefundResponse):
+            raise TypeError("refund request returned an invalid authoritative result")
+        return RefundRequestActionResult(
+            action="refund_request", refund=execution.result
+        )
+    raise TypeError("unknown authoritative chat action result")
 
 
 def get_commerce_read_repository(
@@ -187,6 +218,7 @@ async def chat(
             proposed_action=(
                 asdict(result.proposed_action) if result.proposed_action is not None else None
             ),
+            action_result=_action_result(result.action_result),
         ),
         "meta": {"request_id": request.state.request_id},
     }

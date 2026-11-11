@@ -8,7 +8,14 @@ from fastapi.testclient import TestClient
 from sqlalchemy import func, select
 
 from app.models.catalog import Category, Color, Product, ProductVariant, Size
-from app.models.commerce import Cart, InventoryMovement, Order, PaymentAttempt, RefundRequest
+from app.models.commerce import (
+    Cart,
+    IdempotencyRecord,
+    InventoryMovement,
+    Order,
+    PaymentAttempt,
+    RefundRequest,
+)
 
 
 @pytest.fixture
@@ -155,6 +162,26 @@ def test_order_create_retry_replays_and_changed_payload_conflicts(
     headers = {"Idempotency-Key": "checkout-retry-001"}
 
     first = auth_client.post("/api/v1/orders", headers=headers, json=payload)
+
+    async def emulate_legacy_record_and_advance_order() -> None:
+        async with auth_session_factory() as session:
+            order = await session.get(Order, UUID(first.json()["data"]["id"]))
+            record = await session.scalar(
+                select(IdempotencyRecord).where(
+                    IdempotencyRecord.operation == "order_create"
+                )
+            )
+            payment = await session.scalar(
+                select(PaymentAttempt).where(PaymentAttempt.order_id == order.id)
+            )
+            assert order is not None and record is not None and payment is not None
+            record.response_body = {"order_id": str(order.id)}
+            order.status = "completed"
+            order.payment_status = "paid_demo"
+            payment.status = "paid_demo"
+            await session.commit()
+
+    asyncio.run(emulate_legacy_record_and_advance_order())
     replay = auth_client.post("/api/v1/orders", headers=headers, json=payload)
     changed = {**payload, "recipient_name": "Người nhận khác"}
     conflict = auth_client.post("/api/v1/orders", headers=headers, json=changed)
@@ -163,6 +190,8 @@ def test_order_create_retry_replays_and_changed_payload_conflicts(
     assert first.json()["data"]["id"] == replay.json()["data"]["id"]
     assert first.json()["data"]["guest_lookup_token"]
     assert replay.json()["data"]["guest_lookup_token"] is None
+    assert replay.json()["data"]["status"] == "pending_confirmation"
+    assert replay.json()["data"]["payment"]["status"] == "cod_due"
     assert conflict.status_code == 409
     assert conflict.json()["error"]["code"] == "IDEMPOTENCY_KEY_REUSED"
 
@@ -232,6 +261,25 @@ def test_cancel_replays_without_restoring_stock_twice(
         headers=headers,
         json=cancel_payload,
     )
+
+    async def emulate_legacy_record_and_advance_order() -> None:
+        async with auth_session_factory() as session:
+            persisted = await session.get(Order, UUID(order["id"]))
+            record = await session.scalar(
+                select(IdempotencyRecord).where(
+                    IdempotencyRecord.operation == "order_cancel"
+                )
+            )
+            payment = await session.scalar(
+                select(PaymentAttempt).where(PaymentAttempt.order_id == persisted.id)
+            )
+            assert persisted is not None and record is not None and payment is not None
+            record.response_body = {"order_id": str(persisted.id)}
+            persisted.status = "completed"
+            persisted.cancelled_at = None
+            await session.commit()
+
+    asyncio.run(emulate_legacy_record_and_advance_order())
     replay = auth_client.post(
         f"/api/v1/orders/{order['order_code']}/cancel",
         headers=headers,
@@ -240,6 +288,8 @@ def test_cancel_replays_without_restoring_stock_twice(
 
     assert first.status_code == replay.status_code == 200
     assert first.json()["data"]["status"] == "cancelled"
+    assert replay.json()["data"]["status"] == "cancelled"
+    assert replay.json()["data"]["payment"]["status"] == "cancelled"
 
     async def state() -> tuple[int, int]:
         async with auth_session_factory() as session:
@@ -319,6 +369,26 @@ def test_completed_order_refund_uses_server_amount_and_latest_is_owner_scoped(
         headers={"Idempotency-Key": "refund-request-001"},
         json=refund_payload,
     )
+
+    async def emulate_legacy_record_and_advance_refund() -> None:
+        async with auth_session_factory() as session:
+            refund = await session.scalar(select(RefundRequest))
+            record = await session.scalar(
+                select(IdempotencyRecord).where(
+                    IdempotencyRecord.operation == "refund_request"
+                )
+            )
+            assert refund is not None and record is not None
+            record.response_body = {"refund_id": str(refund.id)}
+            refund.status = "demo_approved"
+            await session.commit()
+
+    asyncio.run(emulate_legacy_record_and_advance_refund())
+    replay = auth_client.post(
+        f"/api/v1/orders/{order['order_code']}/refund-requests",
+        headers={"Idempotency-Key": "refund-request-001"},
+        json=refund_payload,
+    )
     latest = auth_client.get(
         f"/api/v1/orders/{order['order_code']}/refund-requests/latest",
         headers={"X-Order-Lookup-Token": order["guest_lookup_token"]},
@@ -327,6 +397,8 @@ def test_completed_order_refund_uses_server_amount_and_latest_is_owner_scoped(
     assert created.status_code == 201, created.text
     assert created.json()["data"]["amount"] == order["total"]
     assert created.json()["data"]["status"] == "requested"
+    assert replay.status_code == 201, replay.text
+    assert replay.json()["data"]["status"] == "requested"
     assert created.json()["data"]["provider"] == "demo"
     assert created.json()["data"]["is_simulation"] is True
     assert latest.status_code == 200

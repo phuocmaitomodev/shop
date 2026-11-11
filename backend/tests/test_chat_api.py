@@ -311,6 +311,7 @@ def test_chat_cart_proposal_is_db_backed_and_has_no_side_effect(
 
     assert response.status_code == 200, response.text
     proposal = response.json()["data"]["proposed_action"]
+    assert response.json()["data"]["action_result"] is None
     assert proposal["action"] == "cart_add"
     assert proposal["resource_code"] == cart["cart_id"]
     assert proposal["requires_confirmation"] is True
@@ -372,17 +373,19 @@ def test_chat_cart_confirmation_consumes_once_and_replays_idempotently(
         json=confirmation_body,
         headers={"Idempotency-Key": "chat-cart-add-0002"},
     )
+    cart_after = auth_client.get("/api/v1/cart").json()["data"]
 
     assert first.status_code == 200, first.text
     assert first.json()["data"]["status"] == "ok"
     assert first.json()["data"]["proposed_action"] is None
+    assert first.json()["data"]["action_result"] is None
     assert replay.status_code == 200, replay.text
     assert replay.json()["data"]["answer"] == first.json()["data"]["answer"]
+    assert replay.json()["data"]["action_result"] is None
     assert key_conflict.status_code == 409
     assert key_conflict.json()["error"]["code"] == "IDEMPOTENCY_KEY_REUSED"
     assert token_replay.status_code == 409
     assert token_replay.json()["error"]["code"] == "CONFIRMATION_INVALID"
-    cart_after = auth_client.get("/api/v1/cart").json()["data"]
     assert cart_after["items"][0]["quantity"] == 3
 
 
@@ -575,6 +578,19 @@ def test_chat_order_create_uses_server_totals_and_reviewed_order_service(
         headers=confirmation_headers,
         json=confirmation_body,
     )
+
+    async def advance_order_status() -> None:
+        from app.models.commerce import Order
+
+        async with auth_session_factory() as session:
+            order = await session.get(
+                Order, UUID(confirmed.json()["data"]["action_result"]["order"]["id"])
+            )
+            assert order is not None
+            order.status = "confirmed"
+            await session.commit()
+
+    asyncio.run(advance_order_status())
     replay = auth_client.post(
         "/api/v1/chat", headers=confirmation_headers, json=confirmation_body
     )
@@ -590,6 +606,16 @@ def test_chat_order_create_uses_server_totals_and_reviewed_order_service(
     assert confirmed.status_code == 200, confirmed.text
     assert replay.status_code == 200, replay.text
     assert replay.json()["data"]["answer"] == confirmed.json()["data"]["answer"]
+    confirmed_result = confirmed.json()["data"]["action_result"]
+    replay_result = replay.json()["data"]["action_result"]
+    assert confirmed_result["action"] == "order_create"
+    assert confirmed_result["order"]["order_code"] in confirmed.json()["data"]["answer"]
+    assert confirmed_result["order"]["total"] == 280_000
+    assert confirmed_result["order"]["guest_lookup_token"]
+    assert replay_result["action"] == "order_create"
+    assert replay_result["order"]["id"] == confirmed_result["order"]["id"]
+    assert replay_result["order"]["status"] == confirmed_result["order"]["status"]
+    assert replay_result["order"]["guest_lookup_token"] is None
     assert client_message_conflict.status_code == 409
     assert client_message_conflict.json()["error"]["code"] == "IDEMPOTENCY_KEY_REUSED"
     async def load_order():
@@ -726,6 +752,14 @@ def test_chat_order_cancel_uses_exact_owned_order_id(
     )
 
     assert confirmed.status_code == 200, confirmed.text
+    assert confirmed.json()["data"]["action_result"]["action"] == "order_cancel"
+    assert confirmed.json()["data"]["action_result"]["order"]["id"] == order_response[
+        "id"
+    ]
+    assert confirmed.json()["data"]["action_result"]["order"]["status"] == "cancelled"
+    assert confirmed.json()["data"]["action_result"]["order"][
+        "guest_lookup_token"
+    ] is None
     assert asyncio.run(status_of_order()) == "cancelled"
 
 
@@ -1295,6 +1329,9 @@ def test_chat_refund_request_uses_server_order_amount(
         },
     )
     assert confirmed.status_code == 200, confirmed.text
+    assert confirmed.json()["data"]["action_result"]["action"] == "refund_request"
+    assert confirmed.json()["data"]["action_result"]["refund"]["amount"] == 280_000
+    assert "guest_lookup_token" not in confirmed.json()["data"]["action_result"]
 
     async def load_refund() -> RefundRequest | None:
         async with auth_session_factory() as session:
@@ -1576,6 +1613,7 @@ def test_chat_endpoint_serializes_return_policy_knowledge_source(monkeypatch) ->
         ],
         "status": "ok",
         "proposed_action": None,
+        "action_result": None,
     }
 
 
@@ -1658,6 +1696,23 @@ def test_openapi_exposes_public_bounded_chat_contract(client: TestClient) -> Non
     assert "proposed_action" in schema["components"]["schemas"]["ChatResponse"][
         "properties"
     ]
+    action_result_schema = schema["components"]["schemas"]["ChatResponse"][
+        "properties"
+    ]["action_result"]["anyOf"][0]
+    assert action_result_schema["discriminator"]["propertyName"] == "action"
+    assert set(action_result_schema["discriminator"]["mapping"]) == {
+        "order_create",
+        "order_cancel",
+        "refund_request",
+    }
+    for schema_name, result_field in (
+        ("OrderCreateActionResult", "order"),
+        ("OrderCancelActionResult", "order"),
+        ("RefundRequestActionResult", "refund"),
+    ):
+        result_schema = schema["components"]["schemas"][schema_name]
+        assert result_schema["additionalProperties"] is False
+        assert set(result_schema["required"]) == {"action", result_field}
 
 
 def test_chat_endpoint_rate_limits_public_provider_calls(monkeypatch) -> None:

@@ -19,6 +19,7 @@ from app.rag.chat import (
     orchestrate_chat,
 )
 from app.schemas.chat import ChatRequest
+from app.schemas.orders import OrderResponse
 from app.rag.retrieval import (
     ProductRetrievalFilters,
     RetrievedKnowledge,
@@ -407,6 +408,9 @@ def test_structured_confirmation_routes_to_adapter_without_provider_calls() -> N
                 action="order_cancel",
                 resource_code="DH-20261103-ABC123",
                 summary="Đã hủy đơn DH-20261103-ABC123.",
+                result=OrderResponse.model_construct(
+                    order_code="DH-20261103-ABC123", status="cancelled"
+                ),
             )
 
     result = asyncio.run(
@@ -428,6 +432,9 @@ def test_structured_confirmation_routes_to_adapter_without_provider_calls() -> N
     assert result.status == "ok"
     assert result.answer == "Đã hủy đơn DH-20261103-ABC123."
     assert result.proposed_action is None
+    assert result.action_result is not None
+    assert isinstance(result.action_result.result, OrderResponse)
+    assert result.action_result.result.order_code == "DH-20261103-ABC123"
 
 
 def test_cart_read_uses_typed_repository_after_ownership_context() -> None:

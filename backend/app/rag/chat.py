@@ -120,6 +120,7 @@ class ChatResult:
     sources: list[ChatSource]
     status: ChatStatus
     proposed_action: ChatActionProposal | None = None
+    action_result: ChatActionExecution | None = None
 
 
 @dataclass(frozen=True)
@@ -1371,6 +1372,7 @@ async def orchestrate_chat(
             products=[],
             sources=[],
             status="ok",
+            action_result=execution,
         )
     route = _route_message(message, history)
     if route is None:
