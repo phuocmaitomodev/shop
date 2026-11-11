@@ -5,8 +5,9 @@ import { describe, expect, it, vi } from 'vitest'
 
 import ProductDetailPage from '../pages/ProductDetailPage.vue'
 import { getProduct } from '../services/catalog'
-import { addCartItem } from '../services/commerce'
+import { addCartItem, getCart } from '../services/commerce'
 import { useCartCountStore } from '../stores/cart-count'
+import { requestChatAction } from '../stores/chat-action'
 import type { ProductDetail } from '../types/catalog'
 
 vi.mock('../services/catalog', () => ({
@@ -14,10 +15,14 @@ vi.mock('../services/catalog', () => ({
 }))
 vi.mock('../services/commerce', () => ({
   addCartItem: vi.fn(),
+  getCart: vi.fn(),
 }))
+vi.mock('../stores/chat-action', () => ({ requestChatAction: vi.fn() }))
 
 const getProductMock = vi.mocked(getProduct)
 const addCartItemMock = vi.mocked(addCartItem)
+const getCartMock = vi.mocked(getCart)
+const requestChatActionMock = vi.mocked(requestChatAction)
 
 const product: ProductDetail = {
   id: 'product-1',
@@ -157,6 +162,25 @@ describe('ProductDetailPage', () => {
     await flushPromises()
 
     expect(useCartCountStore(pinia).itemCount).toBe(5)
+  })
+
+  it('stages cart add only after reading the current server cart id', async () => {
+    getProductMock.mockResolvedValue(product)
+    getCartMock.mockResolvedValue({ cart_id: 'cart-current' } as never)
+    const wrapper = await mountPage()
+    await flushPromises()
+
+    await wrapper.get('[aria-label="Số lượng thêm vào giỏ"]').setValue(2)
+    await wrapper.get('[data-testid="chat-cart-add"]').trigger('click')
+    await flushPromises()
+
+    expect(getCartMock).toHaveBeenCalledOnce()
+    expect(requestChatActionMock).toHaveBeenCalledWith({
+      actionContext: {
+        action: 'cart_add', cart_id: 'cart-current', variant_id: 'variant-black-m', quantity: 2,
+      },
+      prompt: 'Thêm 2 Áo thun basic vào giỏ hàng',
+    })
   })
 
   it('shows a recoverable error and retries the request', async () => {

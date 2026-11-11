@@ -6,6 +6,7 @@ const commerce = vi.hoisted(() => ({ getCart: vi.fn() }))
 vi.mock('../services/commerce', () => commerce)
 
 import SiteHeader from '../components/SiteHeader.vue'
+import { lastChatAuthoritativeState, publishChatAuthoritativeState } from '../stores/chat-action'
 import { useCartCountStore } from '../stores/cart-count'
 
 const cart = {
@@ -40,7 +41,10 @@ const accessibleName = (element: Element) => {
 }
 
 describe('SiteHeader cart count', () => {
-  beforeEach(() => vi.clearAllMocks())
+  beforeEach(() => {
+    vi.clearAllMocks()
+    lastChatAuthoritativeState.value = null
+  })
 
   it('loads the authoritative cart count and renders it in both cart links', async () => {
     commerce.getCart.mockResolvedValue(cart)
@@ -80,6 +84,24 @@ describe('SiteHeader cart count', () => {
     expect(wrapper.findAll('a[href="/gio-hang"]').map((link) => accessibleName(link.element))).toEqual([
       'Giỏ hàng (3)',
       'Giỏ hàng (3)',
+    ])
+  })
+
+  it('synchronizes both cart links from the authoritative cart refreshed after chat confirmation', async () => {
+    commerce.getCart.mockResolvedValue(cart)
+    const wrapper = mountHeader()
+    await flushPromises()
+
+    publishChatAuthoritativeState({
+      kind: 'cart',
+      action: 'cart_add',
+      cart: { ...cart, version: 2, item_count: 6 },
+    })
+    await flushPromises()
+
+    expect(wrapper.findAll('a[href="/gio-hang"]').map((link) => link.text())).toEqual([
+      'Giỏ hàng (6)',
+      'Giỏ hàng (6)',
     ])
   })
 })

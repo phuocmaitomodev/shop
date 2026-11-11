@@ -13,11 +13,15 @@ vi.mock('../services/commerce', () => ({
   cancelOrder: mocks.cancelOrder, createRefundRequest: mocks.createRefundRequest,
 }))
 vi.mock('../stores/order-session', () => ({ rememberGuestOrder: mocks.rememberGuestOrder, useOrderAccess: mocks.useOrderAccess }))
-vi.mock('../stores/chat-action', () => ({ requestChatAction: mocks.requestChatAction }))
+vi.mock('../stores/chat-action', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../stores/chat-action')>(),
+  requestChatAction: mocks.requestChatAction,
+}))
 vi.mock('vue-router', () => ({ useRouter: () => ({ push: mocks.push }), useRoute: () => ({ params: { orderCode: 'DH-001' } }) }))
 
 import OrderDetailPage from '../pages/OrderDetailPage.vue'
 import OrderLookupPage from '../pages/OrderLookupPage.vue'
+import { lastChatAuthoritativeState, publishChatAuthoritativeState } from '../stores/chat-action'
 
 const order = {
   id: 'order-1', order_code: 'DH-001', status: 'completed', recipient_name: 'Nguyễn An', phone: '0900000000',
@@ -28,7 +32,10 @@ const order = {
 }
 
 describe('order lookup and detail UI', () => {
-  beforeEach(() => vi.clearAllMocks())
+  beforeEach(() => {
+    vi.clearAllMocks()
+    lastChatAuthoritativeState.value = null
+  })
 
   it('keeps the guest token out of navigation and delegates it to the header-only service', async () => {
     mocks.lookupGuestOrder.mockResolvedValue(order)
@@ -113,5 +120,50 @@ describe('order lookup and detail UI', () => {
       lookupToken: 'secret-token-long-enough',
       prompt: 'Tạo yêu cầu hoàn tiền mô phỏng cho đơn DH-001',
     })
+  })
+
+  it('replaces order and refund status with authoritative state after chat confirmation', async () => {
+    mocks.useOrderAccess.mockReturnValue({ order, access: { mode: 'authenticated' } })
+    mocks.getPaymentDemo.mockResolvedValue(order.payment)
+    mocks.getLatestRefundRequest.mockResolvedValue(null)
+    const wrapper = mount(OrderDetailPage)
+    await flushPromises()
+    const refreshedRefund = {
+      id: 'refund-1', order_code: 'DH-001', reason_code: 'wrong_item', reason_detail: null,
+      amount: 270000, status: 'demo_reviewing', provider: 'demo', is_simulation: true,
+      created_at: '2026-11-03T01:00:00Z',
+    }
+
+    publishChatAuthoritativeState({
+      kind: 'refund',
+      order: { ...order, status: 'completed' },
+      refund: refreshedRefund,
+    } as never)
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('Trạng thái: demo_reviewing')
+    expect(wrapper.find('[data-testid="refund-form"]').exists()).toBe(false)
+  })
+
+  it('synchronizes the cancelled demo payment from the authoritative order refresh', async () => {
+    const cancellableOrder = { ...order, status: 'confirmed' }
+    mocks.useOrderAccess.mockReturnValue({ order: cancellableOrder, access: { mode: 'authenticated' } })
+    mocks.getPaymentDemo.mockResolvedValue(order.payment)
+    mocks.getLatestRefundRequest.mockResolvedValue(null)
+    const wrapper = mount(OrderDetailPage)
+    await flushPromises()
+
+    publishChatAuthoritativeState({
+      kind: 'order',
+      order: {
+        ...cancellableOrder,
+        status: 'cancelled',
+        payment: { ...order.payment, status: 'cancelled' },
+      },
+    } as never)
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('Trạng thái đơn: cancelled')
+    expect(wrapper.text()).toContain('Trạng thái: cancelled')
   })
 })

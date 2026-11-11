@@ -8,8 +8,13 @@ const commerce = vi.hoisted(() => ({
   removeCartItem: vi.fn(),
   applyCartCoupon: vi.fn(),
   removeCartCoupon: vi.fn(),
+  requestChatAction: vi.fn(),
 }))
 vi.mock('../services/commerce', () => commerce)
+vi.mock('../stores/chat-action', () => ({
+  lastChatAuthoritativeState: { __v_isRef: true, value: null },
+  requestChatAction: commerce.requestChatAction,
+}))
 
 import CartPage from '../pages/CartPage.vue'
 import { useCartCountStore } from '../stores/cart-count'
@@ -113,5 +118,35 @@ describe('CartPage', () => {
 
     expect(commerce.getCart).toHaveBeenCalledTimes(2)
     expect(wrapper.get('[role="alert"]').text()).toContain('đã thay đổi')
+  })
+
+  it('stages update and remove proposals only from the current cart item and version', async () => {
+    commerce.getCart.mockResolvedValue(cart)
+    const wrapper = mountCartPage()
+    await flushPromises()
+
+    await wrapper.get('[aria-label="Số lượng Áo thun Mộc"]').setValue(3)
+    await wrapper.get('[data-testid="chat-update-item-item-1"]').trigger('click')
+    expect(commerce.requestChatAction).toHaveBeenLastCalledWith({
+      actionContext: {
+        action: 'cart_update',
+        cart_id: 'cart-1',
+        cart_item_id: 'item-1',
+        cart_version: 3,
+        quantity: 3,
+      },
+      prompt: 'Cập nhật Áo thun Mộc thành 3 sản phẩm',
+    })
+
+    await wrapper.get('[data-testid="chat-remove-item-item-1"]').trigger('click')
+    expect(commerce.requestChatAction).toHaveBeenLastCalledWith({
+      actionContext: {
+        action: 'cart_remove',
+        cart_id: 'cart-1',
+        cart_item_id: 'item-1',
+        cart_version: 3,
+      },
+      prompt: 'Xóa Áo thun Mộc khỏi giỏ hàng',
+    })
   })
 })

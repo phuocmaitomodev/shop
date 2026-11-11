@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { storeToRefs } from 'pinia'
-import { onMounted } from 'vue'
+import { onMounted, watch } from 'vue'
 
+import { lastChatAuthoritativeState } from '../stores/chat-action'
 import { useCartCountStore } from '../stores/cart-count'
 import { useUiStore } from '../stores/ui'
 
@@ -11,6 +12,9 @@ const { itemCount } = storeToRefs(cartCountStore)
 const { isNavigationOpen } = storeToRefs(uiStore)
 
 onMounted(cartCountStore.loadCartCount)
+watch(lastChatAuthoritativeState, (state) => {
+  if (state?.kind === 'cart') cartCountStore.syncCart(state.cart)
+})
 </script>
 
 <template>

@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import { onMounted, reactive, ref } from 'vue'
+import { onMounted, reactive, ref, watch } from 'vue'
 import { ApiClientError } from '../services/api-client'
 import { applyCartCoupon, getCart, removeCartCoupon, removeCartItem, updateCartItem } from '../services/commerce'
 import { useCartCountStore } from '../stores/cart-count'
+import { lastChatAuthoritativeState, requestChatAction } from '../stores/chat-action'
 import type { Cart } from '../types/commerce'
 
 const cartCountStore = useCartCountStore()
@@ -73,6 +74,35 @@ const update = (itemId: string, stock: number, name: string) => {
   if (cart.value) void mutate(() => updateCartItem(itemId, { quantity, cart_version: cart.value!.version }))
 }
 
+const stageUpdate = (itemId: string, stock: number, name: string) => {
+  const quantity = quantities[itemId]
+  if (!cart.value) return
+  if (typeof quantity !== 'number' || !Number.isInteger(quantity) || quantity < 1) { errorMessage.value = 'Số lượng phải là số nguyên từ 1 trở lên.'; return }
+  if (quantity > stock) { errorMessage.value = `${name} chỉ còn ${stock} sản phẩm.`; return }
+  requestChatAction({
+    actionContext: {
+      action: 'cart_update', cart_id: cart.value.cart_id, cart_item_id: itemId,
+      cart_version: cart.value.version, quantity,
+    },
+    prompt: `Cập nhật ${name} thành ${quantity} sản phẩm`,
+  })
+}
+
+const stageRemove = (itemId: string, name: string) => {
+  if (!cart.value) return
+  requestChatAction({
+    actionContext: {
+      action: 'cart_remove', cart_id: cart.value.cart_id, cart_item_id: itemId,
+      cart_version: cart.value.version,
+    },
+    prompt: `Xóa ${name} khỏi giỏ hàng`,
+  })
+}
+
+watch(lastChatAuthoritativeState, (state) => {
+  if (state?.kind === 'cart') sync(state.cart)
+})
+
 onMounted(load)
 </script>
 
@@ -90,7 +120,7 @@ onMounted(load)
             <div><h2>{{ item.product_name }}</h2><p>{{ item.color_name }} · {{ item.size_code }} · {{ money.format(item.unit_price) }}</p><p v-if="item.price_changed" class="commerce-alert">Giá đã đổi từ {{ money.format(item.previous_unit_price) }}.</p></div>
             <label :for="`quantity-${item.item_id}`">Số lượng</label>
             <input :id="`quantity-${item.item_id}`" v-model.number="quantities[item.item_id]" type="number" min="1" :max="item.stock_quantity" :aria-label="`Số lượng ${item.product_name}`">
-            <div class="commerce-actions"><button :data-testid="`update-item-${item.item_id}`" :disabled="busy" @click="update(item.item_id, item.stock_quantity, item.product_name)">Cập nhật</button><button :disabled="busy" @click="mutate(() => removeCartItem(item.item_id, cart!.version))">Xóa</button></div>
+            <div class="commerce-actions"><button :data-testid="`update-item-${item.item_id}`" :disabled="busy" @click="update(item.item_id, item.stock_quantity, item.product_name)">Cập nhật</button><button :disabled="busy" @click="mutate(() => removeCartItem(item.item_id, cart!.version))">Xóa</button><button type="button" :data-testid="`chat-update-item-${item.item_id}`" :disabled="busy" @click="stageUpdate(item.item_id, item.stock_quantity, item.product_name)">Đề xuất cập nhật qua trợ lý</button><button type="button" :data-testid="`chat-remove-item-${item.item_id}`" :disabled="busy" @click="stageRemove(item.item_id, item.product_name)">Đề xuất xóa qua trợ lý</button></div>
           </article>
         </div>
         <aside class="commerce-summary">

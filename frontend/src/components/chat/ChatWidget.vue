@@ -1,8 +1,13 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 
+import { refreshChatActionState } from '../../services/chat-action-sync'
 import { confirmChatAction, sendChatMessage } from '../../services/chat'
-import { clearPendingChatAction, pendingChatAction } from '../../stores/chat-action'
+import {
+  clearPendingChatAction,
+  pendingChatAction,
+  publishChatAuthoritativeState,
+} from '../../stores/chat-action'
 import type { ChatHistoryItem, ChatProduct, ChatProposedAction, ChatSource, ChatStatus } from '../../types/chat'
 import ChatProductCard from './ChatProductCard.vue'
 
@@ -153,6 +158,15 @@ const confirmProposal = async (item: ChatMessage) => {
           attempt.clientMessageId,
           attempt.idempotencyKey,
         )
+    try {
+      publishChatAuthoritativeState(await refreshChatActionState(
+        proposal.action,
+        proposal.resource_code,
+        item.lookupToken,
+      ))
+    } catch {
+      item.actionError = 'Thao tác đã được máy chủ xử lý nhưng không thể tải trạng thái mới nhất. Trạng thái gần nhất vẫn được giữ; vui lòng tải lại trang.'
+    }
     item.proposedAction = null
     item.confirmationAttempt = undefined
     messages.value = keepBounded([

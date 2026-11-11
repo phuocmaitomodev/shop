@@ -1,22 +1,32 @@
 import { mount } from '@vue/test-utils'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-const { confirmChatActionMock, sendChatMessageMock } = vi.hoisted(() => ({
+const { confirmChatActionMock, refreshChatActionStateMock, sendChatMessageMock } = vi.hoisted(() => ({
   confirmChatActionMock: vi.fn(),
+  refreshChatActionStateMock: vi.fn(),
   sendChatMessageMock: vi.fn(),
 }))
 vi.mock('../services/chat', () => ({
   confirmChatAction: confirmChatActionMock,
   sendChatMessage: sendChatMessageMock,
 }))
+vi.mock('../services/chat-action-sync', () => ({
+  refreshChatActionState: refreshChatActionStateMock,
+}))
 
 import ChatWidget from '../components/chat/ChatWidget.vue'
-import { clearPendingChatAction, requestChatAction } from '../stores/chat-action'
+import {
+  clearPendingChatAction,
+  lastChatAuthoritativeState,
+  requestChatAction,
+} from '../stores/chat-action'
 
 describe('ChatWidget', () => {
   beforeEach(() => {
     clearPendingChatAction()
+    lastChatAuthoritativeState.value = null
     confirmChatActionMock.mockReset()
+    refreshChatActionStateMock.mockReset()
     sendChatMessageMock.mockReset()
   })
 
@@ -205,6 +215,8 @@ describe('ChatWidget', () => {
       status: 'ok',
       proposed_action: null,
     })
+    const authoritativeOrder = { id: 'order-1', order_code: 'DH-2026-0001', status: 'cancelled' }
+    refreshChatActionStateMock.mockResolvedValue({ kind: 'order', order: authoritativeOrder })
     const wrapper = mount(ChatWidget)
     await wrapper.get('[data-testid="chat-toggle"]').trigger('click')
     await wrapper.get('textarea').setValue('Hủy đơn giúp tôi')
@@ -224,9 +236,42 @@ describe('ChatWidget', () => {
       expect.stringMatching(/^[0-9a-f-]{36}$/),
       expect.stringMatching(/^chat-action-[0-9a-f-]{36}$/),
     )
+    expect(refreshChatActionStateMock).toHaveBeenCalledWith('order_cancel', 'DH-2026-0001', undefined)
+    expect(lastChatAuthoritativeState.value).toEqual({ kind: 'order', order: authoritativeOrder })
     expect(wrapper.get('[data-testid="chat-messages"]').text()).toContain('Đã hủy đơn')
     expect(wrapper.find('[data-testid="chat-proposed-action"]').exists()).toBe(false)
     vi.useRealTimers()
+  })
+
+  it('keeps the last authoritative state and reports a refresh warning after a successful mutation', async () => {
+    lastChatAuthoritativeState.value = {
+      kind: 'cart',
+      action: 'cart_update',
+      cart: { cart_id: 'cart-1', version: 2, item_count: 1 },
+    } as never
+    sendChatMessageMock.mockResolvedValue({
+      answer: 'Vui lòng xác nhận cập nhật giỏ hàng.', products: [], sources: [], status: 'ok',
+      proposed_action: {
+        action: 'cart_update', resource_code: 'cart-1', summary: 'Đổi số lượng thành 2',
+        requires_confirmation: true, confirmation_token: 'opaque-one-time-token', expires_at: '2099-01-01T00:00:00Z',
+      },
+    })
+    confirmChatActionMock.mockResolvedValue({
+      answer: 'Đã cập nhật giỏ hàng.', products: [], sources: [], status: 'ok', proposed_action: null,
+    })
+    refreshChatActionStateMock.mockRejectedValue(new Error('refresh failed'))
+    const wrapper = mount(ChatWidget)
+    await wrapper.get('[data-testid="chat-toggle"]').trigger('click')
+    await wrapper.get('textarea').setValue('Đổi số lượng')
+    await wrapper.get('form').trigger('submit')
+    await vi.waitFor(() => expect(wrapper.find('[data-testid="chat-action-confirm"]').exists()).toBe(true))
+
+    await wrapper.get('[data-testid="chat-action-confirm"]').trigger('click')
+    await vi.waitFor(() => expect(wrapper.text()).toContain('không thể tải trạng thái mới nhất'))
+
+    expect(lastChatAuthoritativeState.value).toMatchObject({ kind: 'cart', cart: { version: 2 } })
+    expect(wrapper.text()).toContain('Đã cập nhật giỏ hàng')
+    wrapper.unmount()
   })
 
   it('disables confirmation as soon as the proposal expires', async () => {

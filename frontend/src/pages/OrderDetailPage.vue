@@ -1,8 +1,8 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { cancelOrder, createActionConfirmation, createRefundRequest, getLatestRefundRequest, getOrder, getPaymentDemo } from '../services/commerce'
-import { requestChatAction } from '../stores/chat-action'
+import { lastChatAuthoritativeState, requestChatAction } from '../stores/chat-action'
 import { useOrderAccess } from '../stores/order-session'
 import type { OrderAccessContext, OrderSummary, PaymentDemo, RefundRequest } from '../types/commerce'
 
@@ -86,6 +86,13 @@ const stageRefundChat = () => {
     prompt: `Tạo yêu cầu hoàn tiền mô phỏng cho đơn ${order.value.order_code}`,
   })
 }
+
+watch(lastChatAuthoritativeState, (state) => {
+  if (!state || state.kind === 'cart' || state.order.order_code !== orderCode.value) return
+  order.value = state.order
+  payment.value = state.order.payment
+  if (state.kind === 'refund') refund.value = state.refund
+})
 
 onMounted(load)
 </script>

@@ -7,8 +7,9 @@ import ProductPrice from '../components/catalog/ProductPrice.vue'
 import ProductStockStatus from '../components/catalog/ProductStockStatus.vue'
 import ProductVariantSelector from '../components/catalog/ProductVariantSelector.vue'
 import { getProduct } from '../services/catalog'
-import { addCartItem } from '../services/commerce'
+import { addCartItem, getCart } from '../services/commerce'
 import { useCartCountStore } from '../stores/cart-count'
+import { requestChatAction } from '../stores/chat-action'
 import type { ProductDetail, ProductImage as ProductImageData, ProductVariant } from '../types/catalog'
 
 const route = useRoute()
@@ -64,6 +65,27 @@ const addToCart = async () => {
     useCartCountStore().syncCart(cart)
     cartMessage.value = 'Đã thêm vào giỏ hàng.'
   } catch { cartError.value = 'Không thể thêm vào giỏ. Tồn kho có thể vừa thay đổi; vui lòng thử lại.' } finally { adding.value = false }
+}
+
+const stageCartAdd = async () => {
+  cartMessage.value = ''
+  cartError.value = ''
+  if (!selectedVariant.value) { cartError.value = 'Vui lòng chọn biến thể còn hàng trước khi tạo đề xuất.'; return }
+  if (typeof quantity.value !== 'number' || !Number.isInteger(quantity.value) || quantity.value < 1) { cartError.value = 'Số lượng phải là số nguyên từ 1 trở lên.'; return }
+  if (quantity.value > selectedVariant.value.stock_quantity) { cartError.value = `Biến thể này chỉ còn ${selectedVariant.value.stock_quantity} sản phẩm.`; return }
+  adding.value = true
+  try {
+    const cart = await getCart()
+    requestChatAction({
+      actionContext: {
+        action: 'cart_add', cart_id: cart.cart_id,
+        variant_id: selectedVariant.value.id, quantity: quantity.value,
+      },
+      prompt: `Thêm ${quantity.value} ${displayName.value} vào giỏ hàng`,
+    })
+  } catch {
+    cartError.value = 'Không thể đọc giỏ hàng mới nhất để tạo đề xuất. Vui lòng thử lại.'
+  } finally { adding.value = false }
 }
 
 const loadProduct = async () => {
@@ -149,7 +171,8 @@ watch(() => route.params.slug, () => {
         <div class="add-to-cart">
           <label for="add-quantity">Số lượng</label>
           <input id="add-quantity" v-model.number="quantity" type="number" min="1" :max="selectedVariant?.stock_quantity" aria-label="Số lượng thêm vào giỏ">
-          <button data-testid="add-to-cart" type="button" :disabled="adding || !selectedVariant" @click="addToCart">{{ adding ? 'Đang thêm…' : 'Thêm vào giỏ hàng' }}</button>
+          <button data-testid="add-to-cart" type="button" :disabled="adding || !selectedVariant" @click="addToCart">{{ adding ? 'Đang xử lý…' : 'Thêm vào giỏ hàng' }}</button>
+          <button data-testid="chat-cart-add" type="button" :disabled="adding || !selectedVariant" @click="stageCartAdd">Đề xuất qua trợ lý</button>
         </div>
         <p v-if="cartError" role="alert">{{ cartError }}</p>
         <p v-if="cartMessage" role="status" data-testid="cart-message">{{ cartMessage }}</p>

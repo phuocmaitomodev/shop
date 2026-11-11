@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { createActionConfirmation, createOrder, getCart } from '../services/commerce'
+import { lastChatAuthoritativeState, requestChatAction } from '../stores/chat-action'
 import { rememberOrder } from '../stores/order-session'
 import type { Cart, CreateOrderRequest, PaymentMethod } from '../types/commerce'
 
@@ -54,6 +55,45 @@ const submit = async () => {
   } finally { submitting.value = false }
 }
 
+const stageOrderChat = () => {
+  if (!cart.value?.cart_id) return
+  const recipientName = form.recipient_name.trim()
+  const phone = form.phone.trim()
+  const addressLine = form.address_line.trim()
+  const province = form.province.trim()
+  if (!recipientName || phone.length < 8 || !addressLine || !province) {
+    errorMessage.value = 'Vui lòng nhập đủ họ tên, số điện thoại và địa chỉ trước khi tạo đề xuất.'
+    return
+  }
+  requestChatAction({
+    actionContext: {
+      action: 'order_create',
+      cart_id: cart.value.cart_id,
+      cart_version: cart.value.version,
+      recipient: { name: recipientName, phone },
+      address: {
+        address_line: addressLine,
+        ward: form.ward.trim() || null,
+        district: form.district.trim() || null,
+        province,
+        note: form.note.trim() || null,
+      },
+      payment_method: form.payment_method,
+      coupon_code: cart.value.coupon_code,
+    },
+    prompt: form.payment_method === 'online_demo'
+      ? 'Tạo đơn hàng với thanh toán online mô phỏng'
+      : 'Tạo đơn hàng COD mô phỏng',
+  })
+}
+
+watch(lastChatAuthoritativeState, (state) => {
+  if (
+    state?.kind === 'cart'
+    && (state.action === 'order_create' || state.cart.cart_id === cart.value?.cart_id)
+  ) cart.value = state.cart
+})
+
 onMounted(load)
 </script>
 
@@ -80,6 +120,7 @@ onMounted(load)
       <label class="confirmation"><input id="confirm-order" v-model="confirmed" type="checkbox" required> Tôi xác nhận thông tin, tổng tiền và hiểu mọi thanh toán online ở đây chỉ là mô phỏng.</label>
       <p v-if="errorMessage" role="alert" class="commerce-alert">{{ errorMessage }}</p>
       <button class="button button--primary" :disabled="submitting || !confirmed">{{ submitting ? 'Đang tạo đơn…' : 'Xác nhận đặt hàng' }}</button>
+      <button type="button" class="button button--secondary" data-testid="chat-order-create" :disabled="submitting" @click="stageOrderChat">Đề xuất đặt hàng qua trợ lý</button>
     </form>
     <div v-else-if="cart" role="status" class="commerce-empty"><h2>Không có sản phẩm để thanh toán</h2><RouterLink class="button button--primary" to="/san-pham">Tiếp tục mua sắm</RouterLink></div>
   </section>
