@@ -34,6 +34,16 @@ describe('chat action authoritative synchronization', () => {
     expect(commerce.getOrder).toHaveBeenCalledWith('DH-001')
   })
 
+  it('uses the authoritative cancelled order returned by the confirmation response', async () => {
+    await expect(refreshChatActionState('order_cancel', 'stale-proposal-code', undefined, {
+      action: 'order_cancel',
+      order,
+    } as never)).resolves.toEqual({ kind: 'order', order })
+
+    expect(commerce.getOrder).not.toHaveBeenCalled()
+    expect(commerce.lookupGuestOrder).not.toHaveBeenCalled()
+  })
+
   it('uses the guest lookup header credential without storing it in synchronized state', async () => {
     commerce.lookupGuestOrder.mockResolvedValue(order)
 
@@ -54,5 +64,16 @@ describe('chat action authoritative synchronization', () => {
       refund,
     })
     expect(commerce.getLatestRefundRequest).toHaveBeenCalledWith('DH-001', { mode: 'authenticated' })
+  })
+
+  it('uses the authoritative refund returned by confirmation while refreshing its order', async () => {
+    commerce.getOrder.mockResolvedValue(order)
+
+    await expect(refreshChatActionState('refund_request', 'DH-001', undefined, {
+      action: 'refund_request',
+      refund,
+    } as never)).resolves.toEqual({ kind: 'refund', order, refund })
+
+    expect(commerce.getLatestRefundRequest).not.toHaveBeenCalled()
   })
 })

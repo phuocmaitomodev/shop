@@ -1,3 +1,5 @@
+import type { OrderSummary, RefundRequest } from './commerce'
+
 export type ChatRole = 'user' | 'assistant'
 export type ChatStatus = 'ok' | 'insufficient_data' | 'out_of_scope' | 'provider_unavailable'
 
@@ -61,10 +63,16 @@ export interface ChatProposedAction {
   expires_at: string
 }
 
+export type ChatActionResult =
+  | { action: 'order_create'; order: OrderSummary }
+  | { action: 'order_cancel'; order: OrderSummary }
+  | { action: 'refund_request'; refund: RefundRequest }
+
 export interface ChatResponse {
   answer: string
   products: ChatProduct[]
   sources: ChatSource[]
   status: ChatStatus
   proposed_action: ChatProposedAction | null
+  action_result: ChatActionResult | null
 }

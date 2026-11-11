@@ -1,5 +1,6 @@
 import { mount } from '@vue/test-utils'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { createMemoryHistory, createRouter } from 'vue-router'
 
 const chatEnvelope = {
   data: {
@@ -21,6 +22,20 @@ const chatEnvelope = {
   meta: { request_id: 'integration-request' },
 }
 
+const createTestRouter = async () => {
+  const router = createRouter({
+    history: createMemoryHistory(),
+    routes: [
+      { path: '/', component: { template: '<main />' } },
+      { path: '/san-pham/:slug', component: { template: '<main />' } },
+      { path: '/dat-hang-thanh-cong', name: 'order-success', component: { template: '<main />' } },
+    ],
+  })
+  await router.push('/')
+  await router.isReady()
+  return router
+}
+
 describe('chat widget API integration', () => {
   afterEach(() => {
     vi.unstubAllGlobals()
@@ -35,12 +50,9 @@ describe('chat widget API integration', () => {
     }))
     vi.stubGlobal('fetch', fetchMock)
     const { default: ChatWidget } = await import('../components/chat/ChatWidget.vue')
+    const router = await createTestRouter()
     const wrapper = mount(ChatWidget, {
-      global: {
-        stubs: {
-          RouterLink: { props: ['to'], template: '<a :href="to"><slot /></a>' },
-        },
-      },
+      global: { plugins: [router] },
     })
 
     await wrapper.get('[data-testid="chat-toggle"]').trigger('click')
@@ -100,7 +112,8 @@ describe('chat widget API integration', () => {
       }))
     vi.stubGlobal('fetch', fetchMock)
     const { default: ChatWidget } = await import('../components/chat/ChatWidget.vue')
-    const wrapper = mount(ChatWidget)
+    const router = await createTestRouter()
+    const wrapper = mount(ChatWidget, { global: { plugins: [router] } })
 
     await wrapper.get('[data-testid="chat-toggle"]').trigger('click')
     await wrapper.get('textarea').setValue('Hủy đơn của tôi')

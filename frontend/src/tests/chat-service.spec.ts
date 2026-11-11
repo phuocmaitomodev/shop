@@ -29,6 +29,7 @@ const response = {
     confirmation_token: 'opaque-one-time-token',
     expires_at: '2026-11-03T04:00:00Z',
   },
+  action_result: null,
 } satisfies ChatResponse
 
 describe('chat service', () => {

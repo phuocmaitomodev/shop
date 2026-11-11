@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { useRouter } from 'vue-router'
 
 import { refreshChatActionState } from '../../services/chat-action-sync'
 import { confirmChatAction, sendChatMessage } from '../../services/chat'
@@ -8,6 +9,7 @@ import {
   pendingChatAction,
   publishChatAuthoritativeState,
 } from '../../stores/chat-action'
+import { rememberOrder } from '../../stores/order-session'
 import type { ChatHistoryItem, ChatProduct, ChatProposedAction, ChatSource, ChatStatus } from '../../types/chat'
 import ChatProductCard from './ChatProductCard.vue'
 
@@ -22,6 +24,7 @@ interface ChatMessage extends ChatHistoryItem {
 }
 
 const HISTORY_LIMIT = 6
+const router = useRouter()
 const isOpen = ref(false)
 const input = ref<HTMLTextAreaElement | null>(null)
 const toggleButton = ref<HTMLButtonElement | null>(null)
@@ -158,17 +161,31 @@ const confirmProposal = async (item: ChatMessage) => {
           attempt.clientMessageId,
           attempt.idempotencyKey,
         )
+    if (proposal.action === 'order_create') {
+      if (response.action_result?.action !== 'order_create') {
+        throw new Error('Missing authoritative created order')
+      }
+    }
+    item.proposedAction = null
+    item.confirmationAttempt = undefined
+    if (response.action_result?.action === 'order_create') {
+      rememberOrder(response.action_result.order)
+      try {
+        await router.push({ name: 'order-success' })
+      } catch {
+        item.actionError = 'Đơn hàng đã được tạo và lưu trong phiên nhưng không thể mở trang đơn hàng. Vui lòng thử mở lại trang đặt hàng thành công.'
+      }
+    }
     try {
       publishChatAuthoritativeState(await refreshChatActionState(
         proposal.action,
         proposal.resource_code,
         item.lookupToken,
+        response.action_result,
       ))
     } catch {
       item.actionError = 'Thao tác đã được máy chủ xử lý nhưng không thể tải trạng thái mới nhất. Trạng thái gần nhất vẫn được giữ; vui lòng tải lại trang.'
     }
-    item.proposedAction = null
-    item.confirmationAttempt = undefined
     messages.value = keepBounded([
       ...messages.value,
       {

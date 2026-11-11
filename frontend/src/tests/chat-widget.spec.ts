@@ -1,9 +1,10 @@
 import { mount } from '@vue/test-utils'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-const { confirmChatActionMock, refreshChatActionStateMock, sendChatMessageMock } = vi.hoisted(() => ({
+const { confirmChatActionMock, refreshChatActionStateMock, routerPushMock, sendChatMessageMock } = vi.hoisted(() => ({
   confirmChatActionMock: vi.fn(),
   refreshChatActionStateMock: vi.fn(),
+  routerPushMock: vi.fn(),
   sendChatMessageMock: vi.fn(),
 }))
 vi.mock('../services/chat', () => ({
@@ -13,6 +14,7 @@ vi.mock('../services/chat', () => ({
 vi.mock('../services/chat-action-sync', () => ({
   refreshChatActionState: refreshChatActionStateMock,
 }))
+vi.mock('vue-router', () => ({ useRouter: () => ({ push: routerPushMock }) }))
 
 import ChatWidget from '../components/chat/ChatWidget.vue'
 import {
@@ -20,6 +22,7 @@ import {
   lastChatAuthoritativeState,
   requestChatAction,
 } from '../stores/chat-action'
+import { clearRememberedOrder, useRememberedOrder } from '../stores/order-session'
 
 describe('ChatWidget', () => {
   beforeEach(() => {
@@ -27,7 +30,9 @@ describe('ChatWidget', () => {
     lastChatAuthoritativeState.value = null
     confirmChatActionMock.mockReset()
     refreshChatActionStateMock.mockReset()
+    routerPushMock.mockReset()
     sendChatMessageMock.mockReset()
+    clearRememberedOrder()
   })
 
   it('opens from a touch-sized labelled button and closes with Escape', async () => {
@@ -236,7 +241,7 @@ describe('ChatWidget', () => {
       expect.stringMatching(/^[0-9a-f-]{36}$/),
       expect.stringMatching(/^chat-action-[0-9a-f-]{36}$/),
     )
-    expect(refreshChatActionStateMock).toHaveBeenCalledWith('order_cancel', 'DH-2026-0001', undefined)
+    expect(refreshChatActionStateMock).toHaveBeenCalledWith('order_cancel', 'DH-2026-0001', undefined, undefined)
     expect(lastChatAuthoritativeState.value).toEqual({ kind: 'order', order: authoritativeOrder })
     expect(wrapper.get('[data-testid="chat-messages"]').text()).toContain('Đã hủy đơn')
     expect(wrapper.find('[data-testid="chat-proposed-action"]').exists()).toBe(false)
@@ -271,6 +276,92 @@ describe('ChatWidget', () => {
 
     expect(lastChatAuthoritativeState.value).toMatchObject({ kind: 'cart', cart: { version: 2 } })
     expect(wrapper.text()).toContain('Đã cập nhật giỏ hàng')
+    wrapper.unmount()
+  })
+
+  it('retains the authoritative created order and navigates without parsing chat prose', async () => {
+    const order = {
+      id: 'order-new',
+      order_code: 'DH-AUTHORITATIVE',
+      status: 'pending_confirmation',
+      total: 499000,
+      currency: 'VND',
+      guest_lookup_token: 'one-time-guest-lookup-token',
+      payment: { method: 'cod', status: 'cod_due', provider: 'demo', is_simulation: true },
+    }
+    sendChatMessageMock.mockResolvedValue({
+      answer: 'Vui lòng xác nhận tạo đơn.', products: [], sources: [], status: 'ok', action_result: null,
+      proposed_action: {
+        action: 'order_create', resource_code: 'cart-old', summary: 'Tạo đơn COD mô phỏng',
+        requires_confirmation: true, confirmation_token: 'opaque-one-time-token', expires_at: '2099-01-01T00:00:00Z',
+      },
+    })
+    const confirmationResponse = {
+      answer: 'Đã tạo đơn thành công.', products: [], sources: [], status: 'ok', proposed_action: null,
+      action_result: { action: 'order_create', order },
+    }
+    confirmChatActionMock.mockResolvedValue(confirmationResponse)
+    refreshChatActionStateMock.mockResolvedValue({
+      kind: 'cart', action: 'order_create', cart: { cart_id: 'replacement-cart', version: 1, item_count: 0 },
+    })
+    const wrapper = mount(ChatWidget)
+    await wrapper.get('[data-testid="chat-toggle"]').trigger('click')
+    await wrapper.get('textarea').setValue('Tạo đơn từ giỏ hàng hiện tại')
+    await wrapper.get('form').trigger('submit')
+    await vi.waitFor(() => expect(wrapper.find('[data-testid="chat-action-confirm"]').exists()).toBe(true))
+
+    await wrapper.get('[data-testid="chat-action-confirm"]').trigger('click')
+    await vi.waitFor(() => expect(routerPushMock).toHaveBeenCalledWith({ name: 'order-success' }))
+
+    expect(useRememberedOrder().value).toBe(order)
+    expect(refreshChatActionStateMock).toHaveBeenCalledWith(
+      'order_create',
+      'cart-old',
+      undefined,
+      confirmationResponse.action_result,
+    )
+    expect(useRememberedOrder().value?.order_code).not.toBe('cart-old')
+    wrapper.unmount()
+  })
+
+  it('does not retry a created order or discard its one-time token when navigation fails', async () => {
+    const order = {
+      id: 'order-new',
+      order_code: 'DH-TOKEN-SAFE',
+      status: 'pending_confirmation',
+      total: 499000,
+      currency: 'VND',
+      guest_lookup_token: 'one-time-guest-lookup-token',
+      payment: { method: 'cod', status: 'cod_due', provider: 'demo', is_simulation: true },
+    }
+    sendChatMessageMock.mockResolvedValue({
+      answer: 'Vui lòng xác nhận tạo đơn.', products: [], sources: [], status: 'ok', action_result: null,
+      proposed_action: {
+        action: 'order_create', resource_code: 'cart-old', summary: 'Tạo đơn COD mô phỏng',
+        requires_confirmation: true, confirmation_token: 'opaque-one-time-token', expires_at: '2099-01-01T00:00:00Z',
+      },
+    })
+    confirmChatActionMock.mockResolvedValue({
+      answer: 'Đã tạo đơn thành công.', products: [], sources: [], status: 'ok', proposed_action: null,
+      action_result: { action: 'order_create', order },
+    })
+    routerPushMock.mockRejectedValue(new Error('navigation failed'))
+    refreshChatActionStateMock.mockResolvedValue({
+      kind: 'cart', action: 'order_create', cart: { cart_id: 'replacement-cart', version: 1, item_count: 0 },
+    })
+    const wrapper = mount(ChatWidget)
+    await wrapper.get('[data-testid="chat-toggle"]').trigger('click')
+    await wrapper.get('textarea').setValue('Tạo đơn từ giỏ hàng hiện tại')
+    await wrapper.get('form').trigger('submit')
+    await vi.waitFor(() => expect(wrapper.find('[data-testid="chat-action-confirm"]').exists()).toBe(true))
+
+    await wrapper.get('[data-testid="chat-action-confirm"]').trigger('click')
+    await vi.waitFor(() => expect(wrapper.text()).toContain('Đã tạo đơn thành công'))
+
+    expect(wrapper.find('[data-testid="chat-proposed-action"]').exists()).toBe(false)
+    expect(confirmChatActionMock).toHaveBeenCalledTimes(1)
+    expect(useRememberedOrder().value?.guest_lookup_token).toBe('one-time-guest-lookup-token')
+    expect(wrapper.text()).toContain('không thể mở trang đơn hàng')
     wrapper.unmount()
   })
 
