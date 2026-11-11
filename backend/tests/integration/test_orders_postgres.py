@@ -13,8 +13,10 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
 
-from app.core.security import hash_token
+from app.api.v1.cart import _lock_guest_cart_bootstrap
+from app.commerce import chat_actions as chat_actions_api
 from app.commerce.chat_actions import DatabaseChatActionAdapter
+from app.core.security import hash_token
 from app.db.session import get_db_session
 from app.main import create_app
 from app.models.catalog import Category, Color, Product, ProductVariant, Size
@@ -759,7 +761,7 @@ def test_postgres_order_mutations_fail_closed_at_adversarial_boundaries(
     asyncio.run(api_engine.dispose())
 
 
-def test_postgres_chat_empty_cart_concurrency_and_idempotent_replay() -> None:
+def test_postgres_chat_empty_cart_concurrency_and_idempotent_replay(monkeypatch) -> None:
     assert MIGRATION_DATABASE_URL is not None
     require_fresh_migrated_database(MIGRATION_DATABASE_URL)
 
@@ -823,11 +825,34 @@ def test_postgres_chat_empty_cart_concurrency_and_idempotent_replay() -> None:
             )
         assert first.get("/api/v1/cart").json()["data"]["items"] == []
         second.cookies.set("shop_guest", first.cookies["shop_guest"])
-        first_barrier = Barrier(2)
+        guest_token = first.cookies["shop_guest"]
+        owner_lock_acquired = Event()
+        release_owner_lock = Event()
+
+        async def hold_owner_lock() -> None:
+            async with api_session_factory() as session:
+                async with session.begin():
+                    await _lock_guest_cart_bootstrap(session, guest_token)
+                    owner_lock_acquired.set()
+                    await asyncio.to_thread(release_owner_lock.wait)
+
+        owner_lock_thread = Thread(target=lambda: asyncio.run(hold_owner_lock()))
+        owner_lock_thread.start()
+        assert owner_lock_acquired.wait(timeout=5)
+
+        first_barrier = Barrier(3)
+        original_get_or_create_cart = chat_actions_api._get_or_create_cart
+
+        async def materialize_after_barrier(*args, **kwargs):
+            await asyncio.to_thread(first_barrier.wait)
+            return await original_get_or_create_cart(*args, **kwargs)
+
+        monkeypatch.setattr(
+            chat_actions_api, "_get_or_create_cart", materialize_after_barrier
+        )
 
         def confirm(args: tuple[TestClient, str, int]) -> tuple[int, str, dict]:
             client, token, suffix = args
-            first_barrier.wait(timeout=5)
             response = client.post(
                 "/api/v1/chat",
                 json={
@@ -843,12 +868,22 @@ def test_postgres_chat_empty_cart_concurrency_and_idempotent_replay() -> None:
             return response.status_code, data["answer"], data["action_result"]
 
         with ThreadPoolExecutor(max_workers=2) as executor:
-            outcomes = list(
-                executor.map(
-                    confirm,
-                    ((first, proposals[0], 91), (second, proposals[1], 92)),
+            futures = [
+                executor.submit(confirm, attempt)
+                for attempt in (
+                    (first, proposals[0], 91),
+                    (second, proposals[1], 92),
                 )
-            )
+            ]
+            first_barrier.wait(timeout=5)
+            assert all(not future.done() for future in futures)
+            release_owner_lock.set()
+            outcomes = [future.result(timeout=10) for future in futures]
+        owner_lock_thread.join(timeout=5)
+        assert not owner_lock_thread.is_alive()
+        monkeypatch.setattr(
+            chat_actions_api, "_get_or_create_cart", original_get_or_create_cart
+        )
 
         replay_proposal = first.post(
             "/api/v1/chat",
@@ -872,7 +907,29 @@ def test_postgres_chat_empty_cart_concurrency_and_idempotent_replay() -> None:
             "client_message_id": "00000000-0000-0000-0000-000000000093",
         }
         replay_headers = {"Idempotency-Key": "postgres-chat-cart-add-93"}
-        replay_barrier = Barrier(2)
+        replay_lock_acquired = Event()
+        release_replay_lock = Event()
+
+        async def hold_replay_confirmation_lock() -> None:
+            async with api_session_factory() as session:
+                async with session.begin():
+                    locked = await session.scalar(
+                        select(ActionConfirmation)
+                        .where(
+                            ActionConfirmation.token_hash == hash_token(replay_token)
+                        )
+                        .with_for_update()
+                    )
+                    assert locked is not None
+                    replay_lock_acquired.set()
+                    await asyncio.to_thread(release_replay_lock.wait)
+
+        replay_lock_thread = Thread(
+            target=lambda: asyncio.run(hold_replay_confirmation_lock())
+        )
+        replay_lock_thread.start()
+        assert replay_lock_acquired.wait(timeout=5)
+        replay_barrier = Barrier(3)
 
         def replay(client: TestClient) -> tuple[int, str, dict]:
             replay_barrier.wait(timeout=5)
@@ -883,7 +940,13 @@ def test_postgres_chat_empty_cart_concurrency_and_idempotent_replay() -> None:
             return response.status_code, data["answer"], data["action_result"]
 
         with ThreadPoolExecutor(max_workers=2) as executor:
-            replay_outcomes = list(executor.map(replay, (first, second)))
+            futures = [executor.submit(replay, client) for client in (first, second)]
+            replay_barrier.wait(timeout=5)
+            assert all(not future.done() for future in futures)
+            release_replay_lock.set()
+            replay_outcomes = [future.result(timeout=10) for future in futures]
+        replay_lock_thread.join(timeout=5)
+        assert not replay_lock_thread.is_alive()
 
     assert [status_code for status_code, _, _ in outcomes] == [200, 200]
     assert outcomes[0][2] is outcomes[1][2] is None
