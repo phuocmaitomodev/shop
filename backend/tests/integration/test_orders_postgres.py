@@ -264,7 +264,7 @@ def test_postgres_chat_refund_confirmation_serializes_binding_and_side_effect(
         proposal = first.post(
             "/api/v1/chat",
             json={
-                "message": "Yêu cầu hoàn tiền",
+                "message": "Tạo yêu cầu hoàn tiền",
                 "action_context": {
                     "action": "refund_request",
                     "order_id": order["id"],
@@ -797,7 +797,7 @@ def test_postgres_chat_confirmation_concurrent_consume_is_idempotent() -> None:
         proposal = first.post(
             "/api/v1/chat",
             json={
-                "message": "Đề xuất thêm",
+                "message": "Thêm sản phẩm đã chọn vào giỏ hàng",
                 "action_context": {
                     "action": "cart_add",
                     "cart_id": cart["cart_id"],
