@@ -175,3 +175,64 @@ test('@mvp API filter và guardrail không trả dữ liệu ngoài retrieval se
     expect(guarded.answer.toLowerCase()).not.toContain('secret')
   }
 })
+
+test('@mvp @commerce-chat đề xuất cart không side effect và chỉ mutate sau xác nhận', async ({ page }) => {
+  const observedRequests: Array<{ method: string; url: string; body: string | null; idempotencyKey: string | null }> = []
+  page.on('request', (request) => {
+    observedRequests.push({
+      method: request.method(),
+      url: request.url(),
+      body: request.postData(),
+      idempotencyKey: request.headers()['idempotency-key'] ?? null,
+    })
+  })
+
+  await page.goto('/san-pham/ao-thun-cotton-co-ban')
+  await expect(page.getByRole('heading', { level: 1, name: 'Áo thun cotton cơ bản' })).toBeVisible()
+  await page.getByTestId('chat-cart-add').click()
+
+  const dialog = page.getByRole('dialog', { name: 'Trợ lý mua sắm' })
+  await expect(dialog).toBeVisible()
+  const proposalResponsePromise = page.waitForResponse((response) => (
+    response.request().method() === 'POST' && response.url() === `${apiBaseURL}/chat`
+  ))
+  await dialog.getByRole('button', { name: 'Gửi' }).click()
+  const proposalResponse = await proposalResponsePromise
+  const proposalBody = await proposalResponse.json()
+  expect(proposalResponse.status(), JSON.stringify(proposalBody)).toBe(200)
+  const proposal = dialog.getByTestId('chat-proposed-action')
+  await expect(proposal).toContainText('Thêm vào giỏ hàng')
+
+  const cartItemCount = async () => page.evaluate(async (url) => {
+    const response = await fetch(url, { credentials: 'include' })
+    const body = await response.json()
+    return body.data.item_count as number
+  }, `${apiBaseURL}/cart`)
+
+  expect(await cartItemCount(), 'proposal must not mutate the cart').toBe(0)
+  await proposal.getByTestId('chat-action-confirm').click()
+  await expect(proposal).toHaveCount(0)
+  await expect.poll(cartItemCount).toBe(1)
+
+  const chatRequests = observedRequests.filter(({ method, url }) => method === 'POST' && url === `${apiBaseURL}/chat`)
+  expect(chatRequests).toHaveLength(2)
+  expect(JSON.parse(chatRequests[0].body ?? '{}').action_context).toMatchObject({ action: 'cart_add', quantity: 1 })
+  expect(JSON.parse(chatRequests[1].body ?? '{}')).toMatchObject({
+    message: 'Xác nhận thao tác',
+    confirmation_token: expect.any(String),
+    client_message_id: expect.any(String),
+  })
+  expect(JSON.parse(chatRequests[1].body ?? '{}')).not.toHaveProperty('action_context')
+  expect(chatRequests[1].idempotencyKey).toMatch(/^chat-action-/)
+
+  const allowedOrigins = new Set([new URL(page.url()).origin, new URL(apiBaseURL).origin])
+  const externalRequests = observedRequests.filter(({ url }) => !allowedOrigins.has(new URL(url).origin))
+  expect(externalRequests, 'browser must not call an external payment or refund provider').toEqual([])
+
+  const box = await dialog.boundingBox()
+  const viewport = page.viewportSize()
+  expect(box).not.toBeNull()
+  expect(viewport).not.toBeNull()
+  expect(box!.x).toBeGreaterThanOrEqual(0)
+  expect(box!.x + box!.width).toBeLessThanOrEqual(viewport!.width)
+})

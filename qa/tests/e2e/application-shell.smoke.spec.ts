@@ -1,17 +1,10 @@
 import { expect, test } from '@playwright/test'
 
 const placeholderRoutes = [
-  ['/danh-muc/ao-thun', 'Danh mục sản phẩm'],
-  ['/gio-hang', 'Giỏ hàng'],
-  ['/thanh-toan', 'Thanh toán'],
-  ['/dat-hang-thanh-cong', 'Đặt hàng thành công'],
-  ['/dang-nhap', 'Đăng nhập'],
   ['/dang-ky', 'Đăng ký'],
   ['/quen-mat-khau', 'Quên mật khẩu'],
   ['/dat-lai-mat-khau', 'Đặt lại mật khẩu'],
-  ['/tai-khoan', 'Tài khoản'],
   ['/tai-khoan/don-hang', 'Đơn hàng của tôi'],
-  ['/tai-khoan/don-hang/DH-001', 'Chi tiết đơn hàng'],
   ['/admin', 'Quản trị cửa hàng'],
   ['/admin/san-pham', 'Quản lý sản phẩm'],
   ['/admin/don-hang', 'Quản lý đơn hàng'],
