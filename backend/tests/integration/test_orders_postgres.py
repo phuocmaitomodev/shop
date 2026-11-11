@@ -13,6 +13,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
 
+from app.api.v1 import cart as cart_api
 from app.api.v1.cart import _lock_guest_cart_bootstrap
 from app.commerce import chat_actions as chat_actions_api
 from app.commerce.chat_actions import DatabaseChatActionAdapter
@@ -977,6 +978,165 @@ def test_postgres_chat_empty_cart_concurrency_and_idempotent_replay(monkeypatch)
             return int(quantity or 0), int(consumed or 0), int(records or 0)
 
     assert asyncio.run(persisted_state()) == (3, 3, 3)
+    application.dependency_overrides.clear()
+    asyncio.run(api_engine.dispose())
+
+
+def test_postgres_guest_cart_reference_serializes_with_materialization(
+    monkeypatch,
+) -> None:
+    assert MIGRATION_DATABASE_URL is not None
+    require_fresh_migrated_database(MIGRATION_DATABASE_URL)
+
+    async def seed() -> str:
+        engine = create_async_engine(MIGRATION_DATABASE_URL)
+        session_factory = async_sessionmaker(engine, expire_on_commit=False)
+        suffix = uuid4().hex
+        async with session_factory() as session:
+            category = Category(name="Cart ref PG", slug=f"cart-ref-pg-{suffix}")
+            color = Color(name="Đen cart ref PG", slug=f"cart-ref-black-{suffix}")
+            size = Size(code=f"CR-{suffix[:8]}", name="Cart ref PG")
+            product = Product(
+                category=category,
+                sku=f"CART-REF-PG-{suffix}",
+                slug=f"cart-ref-pg-product-{suffix}",
+                name="Sản phẩm cart reference PostgreSQL",
+                price=225_000,
+            )
+            variant = ProductVariant(
+                product=product,
+                color=color,
+                size=size,
+                variant_sku=f"CART-REF-PG-VARIANT-{suffix}",
+                stock_quantity=5,
+            )
+            session.add_all([category, color, size, product, variant])
+            await session.commit()
+            variant_id = str(variant.id)
+        await engine.dispose()
+        return variant_id
+
+    variant_id = asyncio.run(seed())
+    application = create_app()
+    api_engine = create_async_engine(MIGRATION_DATABASE_URL, poolclass=NullPool)
+    api_session_factory = async_sessionmaker(api_engine, expire_on_commit=False)
+
+    async def override_session():
+        async with api_session_factory() as session:
+            yield session
+
+    application.dependency_overrides[get_db_session] = override_session
+    with (
+        TestClient(application) as reader,
+        TestClient(application) as direct_mutator,
+        TestClient(application) as proposer,
+        TestClient(application) as proposal_mutator,
+    ):
+        read_bootstrap = reader.get("/api/v1/cart").json()["data"]
+        direct_mutator.cookies.set("shop_guest", reader.cookies["shop_guest"])
+        read_find_paused = Event()
+        release_read_find = Event()
+        materialization_completed = Event()
+        original_cart_find = cart_api._find_cart
+        original_get_or_create = cart_api._get_or_create_cart
+        pause_read_find = True
+
+        async def pause_first_read_find(*args, **kwargs):
+            nonlocal pause_read_find
+            cart = await original_cart_find(*args, **kwargs)
+            if pause_read_find:
+                pause_read_find = False
+                read_find_paused.set()
+                await asyncio.to_thread(release_read_find.wait)
+            return cart
+
+        async def observe_materialization(*args, **kwargs):
+            cart = await original_get_or_create(*args, **kwargs)
+            materialization_completed.set()
+            return cart
+
+        monkeypatch.setattr(cart_api, "_find_cart", pause_first_read_find)
+        monkeypatch.setattr(
+            cart_api, "_get_or_create_cart", observe_materialization
+        )
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            read_future = executor.submit(reader.get, "/api/v1/cart")
+            assert read_find_paused.wait(timeout=5)
+            mutation_future = executor.submit(
+                direct_mutator.post,
+                "/api/v1/cart/items",
+                json={"variant_id": variant_id, "quantity": 1},
+            )
+            try:
+                assert not materialization_completed.wait(timeout=1)
+            finally:
+                release_read_find.set()
+            read_response = read_future.result(timeout=10)
+            mutation_response = mutation_future.result(timeout=10)
+
+        assert read_response.status_code == 200, read_response.text
+        assert mutation_response.status_code == 201, mutation_response.text
+        assert read_response.json()["data"]["cart_id"] == read_bootstrap["cart_id"]
+        assert (
+            mutation_response.json()["data"]["cart_id"] == read_bootstrap["cart_id"]
+        )
+
+        monkeypatch.setattr(cart_api, "_find_cart", original_cart_find)
+        proposal_bootstrap = proposer.get("/api/v1/cart").json()["data"]
+        proposal_mutator.cookies.set("shop_guest", proposer.cookies["shop_guest"])
+        proposal_find_paused = Event()
+        release_proposal_find = Event()
+        materialization_completed.clear()
+        original_proposal_find = chat_actions_api._find_cart
+        pause_proposal_find = True
+
+        async def pause_first_proposal_find(*args, **kwargs):
+            nonlocal pause_proposal_find
+            cart = await original_proposal_find(*args, **kwargs)
+            if pause_proposal_find:
+                pause_proposal_find = False
+                proposal_find_paused.set()
+                await asyncio.to_thread(release_proposal_find.wait)
+            return cart
+
+        monkeypatch.setattr(
+            chat_actions_api, "_find_cart", pause_first_proposal_find
+        )
+        action = {
+            "message": "Thêm sản phẩm đã chọn vào giỏ hàng",
+            "action_context": {
+                "action": "cart_add",
+                "cart_id": proposal_bootstrap["cart_id"],
+                "variant_id": variant_id,
+                "quantity": 1,
+            },
+        }
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            proposal_future = executor.submit(proposer.post, "/api/v1/chat", json=action)
+            assert proposal_find_paused.wait(timeout=5)
+            mutation_future = executor.submit(
+                proposal_mutator.post,
+                "/api/v1/cart/items",
+                json={"variant_id": variant_id, "quantity": 1},
+            )
+            try:
+                assert not materialization_completed.wait(timeout=1)
+            finally:
+                release_proposal_find.set()
+            proposal_response = proposal_future.result(timeout=10)
+            mutation_response = mutation_future.result(timeout=10)
+
+        assert proposal_response.status_code == 200, proposal_response.text
+        assert mutation_response.status_code == 201, mutation_response.text
+        assert (
+            proposal_response.json()["data"]["proposed_action"]["resource_code"]
+            == proposal_bootstrap["cart_id"]
+        )
+        assert (
+            mutation_response.json()["data"]["cart_id"]
+            == proposal_bootstrap["cart_id"]
+        )
+
     application.dependency_overrides.clear()
     asyncio.run(api_engine.dispose())
 

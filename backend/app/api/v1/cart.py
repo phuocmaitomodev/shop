@@ -82,6 +82,15 @@ async def _lock_guest_cart_bootstrap(
     await session.execute(select(func.pg_advisory_xact_lock(lock_key)))
 
 
+async def _lock_cart_reference(session: AsyncSession, owner: CartOwner) -> None:
+    if owner.user_id is not None:
+        await session.execute(
+            select(User.id).where(User.id == owner.user_id).with_for_update()
+        )
+        return
+    await _lock_guest_cart_bootstrap(session, owner.guest_token)
+
+
 async def _abandon_expired_guest_cart(
     session: AsyncSession, guest_token: str | None
 ) -> None:
@@ -525,8 +534,7 @@ async def get_cart(
     session: AsyncSession = Depends(get_db_session),
 ) -> dict:
     owner = await _resolve_owner(request, session)
-    cart = await _find_cart(session, owner)
-    if cart is None and owner.user_id is None and owner.guest_token is None:
+    if owner.user_id is None and owner.guest_token is None:
         settings = get_settings()
         token = issue_guest_token(ttl_days=settings.guest_token_ttl_days)
         owner.guest_token = token.raw
@@ -537,6 +545,8 @@ async def get_cart(
             max_age=settings.guest_token_ttl_days * 24 * 60 * 60,
             secure=settings.auth_cookie_secure,
         )
+    await _lock_cart_reference(session, owner)
+    cart = await _find_cart(session, owner)
     cart_id = cart.id if cart is not None else await _available_bootstrap_cart_id(
         session, owner
     )

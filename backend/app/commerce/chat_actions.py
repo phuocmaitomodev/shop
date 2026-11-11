@@ -12,6 +12,7 @@ from app.api.v1.cart import (
     _effective_price,
     _find_cart,
     _get_or_create_cart,
+    _lock_cart_reference,
     _load_sellable_variant,
     _owned_item,
     _require_cart_version,
@@ -228,6 +229,7 @@ class DatabaseChatActionAdapter:
                 f"bằng {context.payment_method}."
             ).replace(",", ".")
         elif isinstance(context, CartAddActionContext):
+            await _lock_cart_reference(self._session, owner)
             cart = await _find_cart(self._session, owner, lock=True)
             expected_cart_id = (
                 cart.id
