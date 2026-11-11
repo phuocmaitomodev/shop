@@ -179,6 +179,11 @@ def test_openapi_contains_cart_coupon_contract(client: TestClient) -> None:
         "total",
         "currency",
     } <= set(cart_schema["required"])
+    assert cart_schema["properties"]["cart_id"] == {
+        "format": "uuid",
+        "title": "Cart Id",
+        "type": "string",
+    }
     assert schema["components"]["schemas"]["CartItemUpdateRequest"]["required"] == [
         "quantity",
         "cart_version",

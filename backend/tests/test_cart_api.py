@@ -69,14 +69,16 @@ def valid_coupon(auth_session_factory) -> None:
     asyncio.run(seed())
 
 
-def test_anonymous_empty_cart_read_does_not_persist_cart(
+def test_anonymous_empty_cart_read_bootstraps_stable_id_without_persisting_cart(
     cart_client: TestClient, auth_session_factory
 ) -> None:
     response = cart_client.get("/api/v1/cart")
 
     assert response.status_code == 200
+    cart_id = response.json()["data"]["cart_id"]
+    assert UUID(cart_id)
     assert response.json()["data"] == {
-        "cart_id": None,
+        "cart_id": cart_id,
         "version": 0,
         "items": [],
         "item_count": 0,
@@ -87,7 +89,8 @@ def test_anonymous_empty_cart_read_does_not_persist_cart(
         "total": 0,
         "currency": "VND",
     }
-    assert "shop_guest" not in response.cookies
+    assert response.cookies["shop_guest"]
+    assert cart_client.get("/api/v1/cart").json()["data"]["cart_id"] == cart_id
 
     async def count_carts() -> int:
         async with auth_session_factory() as session:
@@ -163,7 +166,9 @@ def test_cart_rejects_quantity_above_live_stock(
             "requested": 6,
         },
     }
-    assert cart_client.get("/api/v1/cart").json()["data"]["cart_id"] is None
+    empty = cart_client.get("/api/v1/cart").json()["data"]
+    assert UUID(empty["cart_id"])
+    assert empty["items"] == []
 
 
 def test_guest_updates_owned_item_with_current_cart_version(

@@ -8,6 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.v1.cart import (
+    _available_bootstrap_cart_id,
     _effective_price,
     _find_cart,
     _load_sellable_variant,
@@ -227,7 +228,12 @@ class DatabaseChatActionAdapter:
             ).replace(",", ".")
         elif isinstance(context, CartAddActionContext):
             cart = await _find_cart(self._session, owner, lock=True)
-            if cart is None or cart.id != context.cart_id:
+            expected_cart_id = (
+                cart.id
+                if cart is not None
+                else await _available_bootstrap_cart_id(self._session, owner)
+            )
+            if expected_cart_id != context.cart_id:
                 raise AppError(
                     status_code=status.HTTP_404_NOT_FOUND,
                     code="CART_NOT_FOUND",
@@ -235,7 +241,12 @@ class DatabaseChatActionAdapter:
                 )
             variant = await _load_sellable_variant(self._session, context.variant_id)
             existing_item = next(
-                (item for item in cart.items if item.variant_id == variant.id), None
+                (
+                    item
+                    for item in (cart.items if cart is not None else [])
+                    if item.variant_id == variant.id
+                ),
+                None,
             )
             requested_quantity = context.quantity + (
                 existing_item.quantity if existing_item is not None else 0
@@ -274,7 +285,7 @@ class DatabaseChatActionAdapter:
         if not isinstance(
             context, (OrderCancelActionContext, RefundRequestActionContext)
         ):
-            resource_code = str(cart.id)
+            resource_code = str(context.cart_id)
         settings = get_settings()
         token = issue_confirmation_token(
             ttl_seconds=settings.action_confirmation_ttl_seconds
@@ -477,11 +488,21 @@ class DatabaseChatActionAdapter:
         if confirmation.action == "cart_add":
             context = CartAddActionContext.model_validate(confirmation.payload_json)
             current_cart = await _find_cart(self._session, owner, lock=True)
-            if current_cart is None or current_cart.id != context.cart_id:
+            expected_cart_id = (
+                current_cart.id
+                if current_cart is not None
+                else await _available_bootstrap_cart_id(self._session, owner)
+            )
+            if expected_cart_id != context.cart_id:
                 raise self._invalid_confirmation()
             variant = await _load_sellable_variant(self._session, context.variant_id)
             existing_item = next(
-                (item for item in current_cart.items if item.variant_id == variant.id), None
+                (
+                    item
+                    for item in (current_cart.items if current_cart is not None else [])
+                    if item.variant_id == variant.id
+                ),
+                None,
             )
             requested_quantity = context.quantity + (
                 existing_item.quantity if existing_item is not None else 0

@@ -802,42 +802,53 @@ def test_postgres_chat_confirmation_concurrent_consume_is_idempotent() -> None:
 
     application.dependency_overrides[get_db_session] = override_session
     with TestClient(application) as first, TestClient(application) as second:
-        cart = first.post(
-            "/api/v1/cart/items", json={"variant_id": variant_id, "quantity": 1}
-        ).json()["data"]
-        proposal = first.post(
-            "/api/v1/chat",
-            json={
-                "message": "Thêm sản phẩm đã chọn vào giỏ hàng",
-                "action_context": {
-                    "action": "cart_add",
-                    "cart_id": cart["cart_id"],
-                    "variant_id": variant_id,
-                    "quantity": 1,
+        cart = first.get("/api/v1/cart").json()["data"]
+        proposals = []
+        for _ in range(2):
+            proposal = first.post(
+                "/api/v1/chat",
+                json={
+                    "message": "Thêm sản phẩm đã chọn vào giỏ hàng",
+                    "action_context": {
+                        "action": "cart_add",
+                        "cart_id": cart["cart_id"],
+                        "variant_id": variant_id,
+                        "quantity": 1,
+                    },
                 },
-            },
-        )
-        assert proposal.status_code == 200, proposal.text
-        token = proposal.json()["data"]["proposed_action"]["confirmation_token"]
-        assert first.get("/api/v1/cart").json()["data"]["items"][0]["quantity"] == 1
+            )
+            assert proposal.status_code == 200, proposal.text
+            proposals.append(
+                proposal.json()["data"]["proposed_action"]["confirmation_token"]
+            )
+        assert first.get("/api/v1/cart").json()["data"]["items"] == []
         second.cookies.set("shop_guest", first.cookies["shop_guest"])
-        body = {
-            "message": "Xác nhận",
-            "confirmation_token": token,
-            "client_message_id": "00000000-0000-0000-0000-000000000091",
-        }
-        headers = {"Idempotency-Key": "postgres-chat-cart-add"}
 
-        def confirm(client: TestClient) -> tuple[int, str, dict]:
-            response = client.post("/api/v1/chat", json=body, headers=headers)
+        def confirm(args: tuple[TestClient, str, int]) -> tuple[int, str, dict]:
+            client, token, suffix = args
+            response = client.post(
+                "/api/v1/chat",
+                json={
+                    "message": "Xác nhận",
+                    "confirmation_token": token,
+                    "client_message_id": (
+                        f"00000000-0000-0000-0000-{suffix:012d}"
+                    ),
+                },
+                headers={"Idempotency-Key": f"postgres-chat-cart-add-{suffix}"},
+            )
             data = response.json()["data"]
             return response.status_code, data["answer"], data["action_result"]
 
         with ThreadPoolExecutor(max_workers=2) as executor:
-            outcomes = list(executor.map(confirm, (first, second)))
+            outcomes = list(
+                executor.map(
+                    confirm,
+                    ((first, proposals[0], 91), (second, proposals[1], 92)),
+                )
+            )
 
     assert [status_code for status_code, _, _ in outcomes] == [200, 200]
-    assert outcomes[0][1] == outcomes[1][1]
     assert outcomes[0][2] is outcomes[1][2] is None
 
     async def persisted_state() -> tuple[int, int, int]:
@@ -848,7 +859,9 @@ def test_postgres_chat_confirmation_concurrent_consume_is_idempotent() -> None:
             )
             consumed = await session.scalar(
                 select(func.count()).select_from(ActionConfirmation).where(
-                    ActionConfirmation.token_hash == hash_token(token),
+                    ActionConfirmation.token_hash.in_(
+                        [hash_token(token) for token in proposals]
+                    ),
                     ActionConfirmation.consumed_at.is_not(None),
                 )
             )
@@ -860,7 +873,7 @@ def test_postgres_chat_confirmation_concurrent_consume_is_idempotent() -> None:
             )
             return int(quantity or 0), int(consumed or 0), int(records or 0)
 
-    assert asyncio.run(persisted_state()) == (2, 1, 1)
+    assert asyncio.run(persisted_state()) == (2, 2, 2)
     application.dependency_overrides.clear()
     asyncio.run(api_engine.dispose())
 

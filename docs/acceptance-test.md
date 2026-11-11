@@ -171,6 +171,9 @@ Kiểm tra ít nhất: header/menu/search, listing/filter, product variant CTA, 
 - `POST /chat` chỉ phát proposal khi có typed `action_context` từ UI/server state với
   exact variant/item/order/cart IDs và field bắt buộc theo action. Prose/model không
   tạo ID/amount; thiếu/ambiguous/unknown field cho zero side effect.
+- Guest cart rỗng nhận authoritative bootstrap `cart_id` và cookie nhưng không có cart
+  row sau GET hoặc proposal. Confirmation đầu tiên atomically tạo/lock cart thật với
+  cùng ID; desktop và mobile phải đi hết proposal → zero side effect → confirmation.
 - Test production wiring trên PostgreSQL thật: DB-backed adapter issue/consume token
   atomically, reauthorize/revalidate rồi gọi cùng reviewed commerce use-case. Mock,
   fake, no-op hoặc dependency trả `None` chỉ là unit support, không đủ để PASS gate.

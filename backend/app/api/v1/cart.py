@@ -1,5 +1,7 @@
+import hashlib
+import hmac
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Request, Response, status
@@ -34,6 +36,50 @@ router = APIRouter(prefix="/cart", tags=["cart"])
 class CartOwner:
     user_id: UUID | None
     guest_token: str | None
+
+
+def _bootstrap_cart_id(owner: CartOwner, *, generation: int = 0) -> UUID | None:
+    if owner.user_id is not None:
+        owner_key = f"user:{owner.user_id}"
+    elif owner.guest_token is not None:
+        owner_key = f"guest:{owner.guest_token}"
+    else:
+        return None
+    secret = get_settings().app_secret_key.get_secret_value().encode("utf-8")
+    digest = hmac.new(
+        secret,
+        f"cart-bootstrap:{owner_key}:{generation}".encode("utf-8"),
+        hashlib.sha256,
+    ).digest()
+    return UUID(bytes=digest[:16], version=4)
+
+
+async def _available_bootstrap_cart_id(
+    session: AsyncSession, owner: CartOwner
+) -> UUID | None:
+    generation = 0
+    while True:
+        cart_id = _bootstrap_cart_id(owner, generation=generation)
+        if cart_id is None:
+            return None
+        if await session.get(Cart, cart_id) is None:
+            return cart_id
+        generation += 1
+
+
+async def _lock_guest_cart_bootstrap(
+    session: AsyncSession, guest_token: str | None
+) -> None:
+    if guest_token is None or session.bind is None:
+        return
+    if session.bind.dialect.name != "postgresql":
+        return
+    lock_key = int.from_bytes(
+        hashlib.sha256(guest_token.encode("utf-8")).digest()[:8],
+        byteorder="big",
+        signed=True,
+    )
+    await session.execute(select(func.pg_advisory_xact_lock(lock_key)))
 
 
 async def _resolve_owner(request: Request, session: AsyncSession) -> CartOwner:
@@ -120,21 +166,36 @@ async def _get_or_create_cart(
         cart = await _find_cart(session, owner, lock=True)
         if cart is not None:
             return cart
-        cart = Cart(user_id=owner.user_id, items=[])
-    else:
-        token = issue_guest_token(ttl_days=settings.guest_token_ttl_days)
-        owner.guest_token = token.raw
         cart = Cart(
-            guest_token_hash=token.digest,
-            guest_expires_at=token.expires_at,
+            id=await _available_bootstrap_cart_id(session, owner),
+            user_id=owner.user_id,
             items=[],
         )
-        set_guest_cookie(
-            response,
-            name=settings.guest_cookie_name,
-            token=token.raw,
-            max_age=settings.guest_token_ttl_days * 24 * 60 * 60,
-            secure=settings.auth_cookie_secure,
+    else:
+        await _lock_guest_cart_bootstrap(session, owner.guest_token)
+        cart = await _find_cart(session, owner, lock=True)
+        if cart is not None:
+            return cart
+        if owner.guest_token is None:
+            token = issue_guest_token(ttl_days=settings.guest_token_ttl_days)
+            owner.guest_token = token.raw
+            guest_expires_at = token.expires_at
+            set_guest_cookie(
+                response,
+                name=settings.guest_cookie_name,
+                token=token.raw,
+                max_age=settings.guest_token_ttl_days * 24 * 60 * 60,
+                secure=settings.auth_cookie_secure,
+            )
+        else:
+            guest_expires_at = datetime.now(timezone.utc) + timedelta(
+                days=settings.guest_token_ttl_days
+            )
+        cart = Cart(
+            id=await _available_bootstrap_cart_id(session, owner),
+            guest_token_hash=hash_token(owner.guest_token),
+            guest_expires_at=guest_expires_at,
+            items=[],
         )
     session.add(cart)
     await session.flush()
@@ -266,9 +327,9 @@ def _validate_price(item: CartItem, variant: ProductVariant) -> None:
         )
 
 
-def _empty_cart() -> CartResponse:
+def _empty_cart(cart_id: UUID) -> CartResponse:
     return CartResponse(
-        cart_id=None,
+        cart_id=cart_id,
         version=0,
         items=[],
         item_count=0,
@@ -440,14 +501,31 @@ def _require_cart_version(cart: Cart, supplied_version: int) -> None:
 @router.get("", response_model=CartEnvelope)
 async def get_cart(
     request: Request,
+    response: Response,
     session: AsyncSession = Depends(get_db_session),
 ) -> dict:
     owner = await _resolve_owner(request, session)
     cart = await _find_cart(session, owner)
+    if cart is None and owner.user_id is None and owner.guest_token is None:
+        settings = get_settings()
+        token = issue_guest_token(ttl_days=settings.guest_token_ttl_days)
+        owner.guest_token = token.raw
+        set_guest_cookie(
+            response,
+            name=settings.guest_cookie_name,
+            token=token.raw,
+            max_age=settings.guest_token_ttl_days * 24 * 60 * 60,
+            secure=settings.auth_cookie_secure,
+        )
+    cart_id = cart.id if cart is not None else await _available_bootstrap_cart_id(
+        session, owner
+    )
+    if cart_id is None:
+        raise RuntimeError("cart owner could not be bootstrapped")
     return {
         "data": await _cart_response(session, owner, cart)
         if cart is not None
-        else _empty_cart(),
+        else _empty_cart(cart_id),
         "meta": {"request_id": request.state.request_id},
     }
 

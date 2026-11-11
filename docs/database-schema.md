@@ -76,6 +76,9 @@
 ### `carts`
 
 - `id`, `user_id` nullable, `guest_token_hash` nullable, `status` (`active|converted|abandoned`), `version`, timestamps.
+- Empty-cart bootstrap IDs are owner-bound capabilities returned by `GET /cart` without
+  a database row. The first direct mutation or confirmed chat mutation creates the
+  real row with that same ID; no schema or migration is required for bootstrap state.
 - Check cart có đúng một owner mode hợp lệ; index cart active theo user/guest.
 
 ### `cart_items`

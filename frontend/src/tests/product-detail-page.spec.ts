@@ -166,7 +166,9 @@ describe('ProductDetailPage', () => {
 
   it('stages cart add only after reading the current server cart id', async () => {
     getProductMock.mockResolvedValue(product)
-    getCartMock.mockResolvedValue({ cart_id: 'cart-current' } as never)
+    getCartMock.mockResolvedValue({
+      cart_id: '00000000-0000-0000-0000-000000000010',
+    } as never)
     const wrapper = await mountPage()
     await flushPromises()
 
@@ -177,7 +179,10 @@ describe('ProductDetailPage', () => {
     expect(getCartMock).toHaveBeenCalledOnce()
     expect(requestChatActionMock).toHaveBeenCalledWith({
       actionContext: {
-        action: 'cart_add', cart_id: 'cart-current', variant_id: 'variant-black-m', quantity: 2,
+        action: 'cart_add',
+        cart_id: '00000000-0000-0000-0000-000000000010',
+        variant_id: 'variant-black-m',
+        quantity: 2,
       },
       prompt: 'Thêm 2 Áo thun basic vào giỏ hàng',
     })

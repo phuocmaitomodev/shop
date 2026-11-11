@@ -45,7 +45,7 @@ class CartItemResponse(BaseModel):
 
 
 class CartResponse(BaseModel):
-    cart_id: UUID | None
+    cart_id: UUID
     version: int
     items: list[CartItemResponse]
     item_count: int

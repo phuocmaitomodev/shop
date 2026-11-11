@@ -117,6 +117,13 @@ không dùng resource UUID hoặc order code đơn lẻ làm quyền truy cập.
 | POST | `/orders/{order_code}/refund-requests` | Tạo yêu cầu refund mô phỏng |
 | GET | `/orders/{order_code}/refund-requests/latest` | Yêu cầu refund mới nhất |
 
+`GET /cart` luôn trả `cart_id` UUID authoritative, kể cả cart rỗng. Nếu guest chưa có
+cookie, response cấp cookie HttpOnly và bootstrap ID ổn định theo capability nhưng
+không persist cart row. Lượt đọc/proposal không tạo cart item và không làm bảng cart
+tăng theo request ẩn danh; mutation trực tiếp hoặc confirmation chat đầu tiên tạo cart
+thật với cùng ID trong transaction. Frontend dùng ID này nguyên trạng trong typed
+`cart_add.action_context`, không tự sinh hoặc lấy từ prose.
+
 Lookup token gửi qua `X-Order-Lookup-Token`, không đặt vào URL. Bổ sung
 `GET /orders/{order_code}/payment`, `POST /orders/{order_code}/refund-requests`
 và `GET /orders/{order_code}/refund-requests/latest`; tất cả kiểm ownership.

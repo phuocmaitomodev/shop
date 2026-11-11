@@ -5,7 +5,7 @@ from uuid import UUID
 import pytest
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from app.api.v1 import chat as chat_api
 from app.core.config import Settings, get_settings
@@ -14,7 +14,13 @@ from app.core.security import hash_token
 from app.db.session import get_db_session
 from app.main import create_app
 from app.models.catalog import Category, Color, Product, ProductVariant, Size
-from app.models.commerce import ActionConfirmation, Order, PaymentAttempt, RefundRequest
+from app.models.commerce import (
+    ActionConfirmation,
+    Cart,
+    Order,
+    PaymentAttempt,
+    RefundRequest,
+)
 from app.rag.chat import (
     ChatProduct,
     ChatResult,
@@ -329,6 +335,56 @@ def test_chat_cart_proposal_is_db_backed_and_has_no_side_effect(
     assert len(stored.token_hash) == 64
     assert stored.action == "cart_add"
     assert stored.consumed_at is None
+
+
+def test_chat_cart_add_bootstraps_empty_guest_cart_only_after_confirmation(
+    auth_client: TestClient,
+    auth_session_factory,
+    chat_action_catalog: dict[str, str],
+) -> None:
+    bootstrap = auth_client.get("/api/v1/cart")
+    assert bootstrap.status_code == 200
+    cart_id = bootstrap.json()["data"]["cart_id"]
+
+    async def count_carts() -> int:
+        async with auth_session_factory() as session:
+            count = await session.scalar(select(func.count()).select_from(Cart))
+            return int(count or 0)
+
+    assert asyncio.run(count_carts()) == 0
+    proposal_response = auth_client.post(
+        "/api/v1/chat",
+        json={
+            "message": "Thêm sản phẩm đã chọn vào giỏ hàng",
+            "action_context": {
+                "action": "cart_add",
+                "cart_id": cart_id,
+                "variant_id": chat_action_catalog["variant_id"],
+                "quantity": 1,
+            },
+        },
+    )
+
+    assert proposal_response.status_code == 200, proposal_response.text
+    proposal = proposal_response.json()["data"]["proposed_action"]
+    assert proposal["resource_code"] == cart_id
+    assert asyncio.run(count_carts()) == 0
+
+    confirmed = auth_client.post(
+        "/api/v1/chat",
+        headers={"Idempotency-Key": "bootstrap-cart-add-0001"},
+        json={
+            "message": "Xác nhận",
+            "confirmation_token": proposal["confirmation_token"],
+            "client_message_id": "00000000-0000-0000-0000-000000000097",
+        },
+    )
+
+    assert confirmed.status_code == 200, confirmed.text
+    cart = auth_client.get("/api/v1/cart").json()["data"]
+    assert cart["cart_id"] == cart_id
+    assert cart["item_count"] == 1
+    assert asyncio.run(count_carts()) == 1
 
 
 def test_chat_cart_confirmation_consumes_once_and_replays_idempotently(

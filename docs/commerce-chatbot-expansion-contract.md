@@ -118,7 +118,14 @@ Base path `/api/v1`; JSON `snake_case`; tiền là integer VND; timestamp ISO-86
 - `DELETE /cart/items/{item_id}` — body/query có `cart_version`
 - `POST /cart/coupon` và `DELETE /cart/coupon`
 
-Mỗi response trả `cart_id`, `version`, items đã hydrate, `subtotal`, `discount_amount`, `shipping_fee`, `total`, `currency=VND`. Backend revalidate variant active, stock và giá. Conflict dùng mã ổn định: `CART_VERSION_CONFLICT`, `OUT_OF_STOCK`, `PRICE_CHANGED`, `COUPON_INVALID`, `COUPON_EXPIRED`, `COUPON_NOT_APPLICABLE`.
+Mỗi response luôn trả `cart_id` UUID authoritative, `version`, items đã hydrate,
+`subtotal`, `discount_amount`, `shipping_fee`, `total`, `currency=VND`. Với owner
+chưa có cart, `GET /cart` cấp guest cookie (nếu cần) và một bootstrap `cart_id` ổn
+định theo owner nhưng không tạo row cart. Mutation trực tiếp hoặc confirmation chat
+đầu tiên mới tạo cart thật với đúng ID đó trong transaction; do đó GET ẩn danh lặp
+lại không làm tăng tài nguyên PostgreSQL. Backend revalidate variant active, stock và
+giá. Conflict dùng mã ổn định: `CART_VERSION_CONFLICT`, `OUT_OF_STOCK`,
+`PRICE_CHANGED`, `COUPON_INVALID`, `COUPON_EXPIRED`, `COUPON_NOT_APPLICABLE`.
 
 ### 4.2 Order và payment demo
 
