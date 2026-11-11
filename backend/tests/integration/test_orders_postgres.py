@@ -1036,9 +1036,11 @@ def test_postgres_guest_cart_reference_serializes_with_materialization(
         direct_mutator.cookies.set("shop_guest", reader.cookies["shop_guest"])
         read_find_paused = Event()
         release_read_find = Event()
+        materialization_lock_attempted = Event()
         materialization_completed = Event()
         original_cart_find = cart_api._find_cart
         original_get_or_create = cart_api._get_or_create_cart
+        original_guest_lock = cart_api._lock_guest_cart_bootstrap
         pause_read_find = True
 
         async def pause_first_read_find(*args, **kwargs):
@@ -1055,6 +1057,10 @@ def test_postgres_guest_cart_reference_serializes_with_materialization(
             materialization_completed.set()
             return cart
 
+        async def observe_materialization_lock(*args, **kwargs):
+            materialization_lock_attempted.set()
+            await original_guest_lock(*args, **kwargs)
+
         monkeypatch.setattr(cart_api, "_find_cart", pause_first_read_find)
         monkeypatch.setattr(
             cart_api, "_get_or_create_cart", observe_materialization
@@ -1062,12 +1068,16 @@ def test_postgres_guest_cart_reference_serializes_with_materialization(
         with ThreadPoolExecutor(max_workers=2) as executor:
             read_future = executor.submit(reader.get, "/api/v1/cart")
             assert read_find_paused.wait(timeout=5)
+            monkeypatch.setattr(
+                cart_api, "_lock_guest_cart_bootstrap", observe_materialization_lock
+            )
             mutation_future = executor.submit(
                 direct_mutator.post,
                 "/api/v1/cart/items",
                 json={"variant_id": variant_id, "quantity": 1},
             )
             try:
+                assert materialization_lock_attempted.wait(timeout=5)
                 assert not materialization_completed.wait(timeout=1)
             finally:
                 release_read_find.set()
@@ -1081,11 +1091,15 @@ def test_postgres_guest_cart_reference_serializes_with_materialization(
             mutation_response.json()["data"]["cart_id"] == read_bootstrap["cart_id"]
         )
 
+        monkeypatch.setattr(
+            cart_api, "_lock_guest_cart_bootstrap", original_guest_lock
+        )
         monkeypatch.setattr(cart_api, "_find_cart", original_cart_find)
         proposal_bootstrap = proposer.get("/api/v1/cart").json()["data"]
         proposal_mutator.cookies.set("shop_guest", proposer.cookies["shop_guest"])
         proposal_find_paused = Event()
         release_proposal_find = Event()
+        materialization_lock_attempted.clear()
         materialization_completed.clear()
         original_proposal_find = chat_actions_api._find_cart
         pause_proposal_find = True
@@ -1114,12 +1128,16 @@ def test_postgres_guest_cart_reference_serializes_with_materialization(
         with ThreadPoolExecutor(max_workers=2) as executor:
             proposal_future = executor.submit(proposer.post, "/api/v1/chat", json=action)
             assert proposal_find_paused.wait(timeout=5)
+            monkeypatch.setattr(
+                cart_api, "_lock_guest_cart_bootstrap", observe_materialization_lock
+            )
             mutation_future = executor.submit(
                 proposal_mutator.post,
                 "/api/v1/cart/items",
                 json={"variant_id": variant_id, "quantity": 1},
             )
             try:
+                assert materialization_lock_attempted.wait(timeout=5)
                 assert not materialization_completed.wait(timeout=1)
             finally:
                 release_proposal_find.set()
